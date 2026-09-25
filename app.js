@@ -11,6 +11,16 @@ let productsCache = [];  // [{id,name,image_url,quantity}]
 let purchasesCache = []; // header rows, newest first
 let salesCache = [];     // header rows, newest first
 
+let editingProductId = null;
+let editingPurchaseId = null;
+let editingSaleId = null;
+
+// when editing a bill that was already 'completed', these hold the
+// original per-product quantities it used, so we can show correct
+// "available stock" numbers while editing (old qty is being un-reserved)
+let editingPurchaseOriginalQty = {};
+let editingSaleOriginalQty = {};
+
 // ---------------------------------------------------------
 // Init
 // ---------------------------------------------------------
@@ -36,7 +46,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.error(err);
       document.getElementById("setupBanner").style.display = "block";
       document.getElementById("setupBanner").innerHTML =
-        "Couldn't reach your Supabase database. Double check the URL/key in <code>config.js</code> and that you ran <code>schema.sql</code>. Error: " + escapeHtml(err.message || String(err));
+        "Couldn't reach your Supabase database. Double check the URL/key in <code>config.js</code> and that you ran the latest <code>schema.sql</code>. Error: " + escapeHtml(err.message || String(err));
       setConnStatus(false, "Connection error");
     }
   }
@@ -80,7 +90,7 @@ function toast(msg, isError) {
   t.classList.toggle("error", !!isError);
   t.classList.add("show");
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove("show"), 2600);
+  t._timer = setTimeout(() => t.classList.remove("show"), 3200);
 }
 function closeAllModals() {
   document.querySelectorAll(".modal-backdrop").forEach(m => m.classList.remove("open"));
@@ -93,6 +103,10 @@ function requireConnection() {
 function isSameMonth(dateStr, ref) {
   const d = new Date(dateStr);
   return d.getFullYear() === ref.getFullYear() && d.getMonth() === ref.getMonth();
+}
+function friendlyError(err) {
+  // Postgres exceptions raised from our RPC functions arrive in err.message
+  return (err && (err.message || err.error_description || err.hint)) || String(err);
 }
 
 // ---------------------------------------------------------
@@ -146,6 +160,9 @@ function renderProducts() {
     return `
     <div class="product-card" data-id="${p.id}">
       <div class="product-actions">
+        <button class="icon-btn" data-action="edit-product" data-id="${p.id}" title="Edit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+        </button>
         <button class="icon-btn danger" data-action="delete-product" data-id="${p.id}" title="Delete">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
         </button>
@@ -159,10 +176,10 @@ function renderProducts() {
   }).join("");
 
   grid.querySelectorAll('[data-action="delete-product"]').forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      deleteProduct(btn.dataset.id);
-    });
+    btn.addEventListener("click", (e) => { e.stopPropagation(); deleteProduct(btn.dataset.id); });
+  });
+  grid.querySelectorAll('[data-action="edit-product"]').forEach(btn => {
+    btn.addEventListener("click", (e) => { e.stopPropagation(); openProductModal(btn.dataset.id); });
   });
 }
 
@@ -175,13 +192,33 @@ async function deleteProduct(id) {
   await loadProducts();
 }
 
+function openProductModal(id) {
+  if (!requireConnection()) return;
+  editingProductId = id || null;
+  const form = document.getElementById("formProduct");
+  form.reset();
+  document.getElementById("pPhotoPreview").innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 16l4.5-6 3 4 3-4L20 16"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>`;
+
+  if (editingProductId) {
+    const p = productsCache.find(p => p.id === editingProductId);
+    if (!p) return;
+    document.getElementById("productModalTitle").textContent = "Edit product";
+    document.getElementById("pName").value = p.name;
+    document.getElementById("pQtyField").style.display = "none"; // quantity is managed via purchases/sales
+    document.getElementById("pPhotoHint").textContent = "Choose a new photo only if you want to replace the current one.";
+    if (p.image_url) document.getElementById("pPhotoPreview").innerHTML = `<img src="${escapeHtml(p.image_url)}">`;
+    document.getElementById("pSubmitBtn").textContent = "Save changes";
+  } else {
+    document.getElementById("productModalTitle").textContent = "Add product";
+    document.getElementById("pQtyField").style.display = "";
+    document.getElementById("pPhotoHint").textContent = 'Uploaded to your Supabase storage bucket "product-images".';
+    document.getElementById("pSubmitBtn").textContent = "Save product";
+  }
+  openModal("modalProduct");
+}
+
 function bindProductModal() {
-  document.getElementById("btnAddProduct").addEventListener("click", () => {
-    if (!requireConnection()) return;
-    document.getElementById("formProduct").reset();
-    document.getElementById("pPhotoPreview").innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 16l4.5-6 3 4 3-4L20 16"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>`;
-    openModal("modalProduct");
-  });
+  document.getElementById("btnAddProduct").addEventListener("click", () => openProductModal(null));
 
   document.getElementById("pPhoto").addEventListener("change", (e) => {
     const file = e.target.files[0];
@@ -198,9 +235,8 @@ function bindProductModal() {
     btn.disabled = true; btn.textContent = "Saving…";
     try {
       const name = document.getElementById("pName").value.trim();
-      const qty = parseInt(document.getElementById("pQty").value, 10) || 0;
       const file = document.getElementById("pPhoto").files[0];
-      let image_url = null;
+      let image_url;
 
       if (file) {
         const path = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
@@ -210,16 +246,25 @@ function bindProductModal() {
         image_url = pub.publicUrl;
       }
 
-      const { error } = await sb.from("products").insert({ name, quantity: qty, image_url });
-      if (error) throw error;
+      if (editingProductId) {
+        const update = { name };
+        if (image_url) update.image_url = image_url;
+        const { error } = await sb.from("products").update(update).eq("id", editingProductId);
+        if (error) throw error;
+        toast("Product updated");
+      } else {
+        const qty = parseInt(document.getElementById("pQty").value, 10) || 0;
+        const { error } = await sb.from("products").insert({ name, quantity: qty, image_url: image_url || null });
+        if (error) throw error;
+        toast("Product added");
+      }
 
-      toast("Product added");
       closeAllModals();
       await loadProducts();
     } catch (err) {
-      toast("Couldn't save product: " + (err.message || err), true);
+      toast("Couldn't save product: " + friendlyError(err), true);
     } finally {
-      btn.disabled = false; btn.textContent = "Save product";
+      btn.disabled = false; btn.textContent = editingProductId ? "Save changes" : "Save product";
     }
   });
 }
@@ -257,7 +302,7 @@ function fillProductDropdowns() {
   document.querySelectorAll(".product-select").forEach(sel => {
     const current = sel.value;
     sel.innerHTML = `<option value="">Select product…</option>` +
-      productsCache.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}">${escapeHtml(p.name)} (${p.quantity} left)</option>`).join("");
+      productsCache.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-qty="${p.quantity}">${escapeHtml(p.name)} (${p.quantity} left)</option>`).join("");
     if (current) sel.value = current;
   });
 }
@@ -275,7 +320,7 @@ async function loadPurchases() {
 function renderPurchases() {
   const tbody = document.getElementById("purchasesTableBody");
   if (!purchasesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
     return;
   }
   tbody.innerHTML = purchasesCache.map(p => `
@@ -283,15 +328,24 @@ function renderPurchases() {
       <td>${escapeHtml(p.dealer_name)}</td>
       <td>${formatDate(p.purchase_date)}</td>
       <td><span class="pill ${p.payment_type}">${p.payment_type}</span></td>
+      <td><span class="pill ${p.status}">${p.status === "draft" ? "Draft" : "Completed"}</span></td>
       <td class="num">${money(p.total_amount)}</td>
-      <td><button class="btn ghost sm" data-action="delete-purchase" data-id="${p.id}">Delete</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
+          <button class="icon-btn danger" data-action="delete-purchase" data-id="${p.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+        </div>
+      </td>
     </tr>`).join("");
 
   tbody.querySelectorAll('[data-action="view-purchase"]').forEach(row => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest('[data-action="delete-purchase"]')) return;
+      if (e.target.closest("button")) return;
       showBillDetail("purchase", row.dataset.id);
     });
+  });
+  tbody.querySelectorAll('[data-action="edit-purchase"]').forEach(btn => {
+    btn.addEventListener("click", (e) => { e.stopPropagation(); openPurchaseModal(btn.dataset.id); });
   });
   tbody.querySelectorAll('[data-action="delete-purchase"]').forEach(btn => {
     btn.addEventListener("click", (e) => { e.stopPropagation(); deleteBill("purchase", btn.dataset.id); });
@@ -303,26 +357,51 @@ function formatDate(d) {
   return new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function bindPurchaseModal() {
-  document.getElementById("btnAddPurchase").addEventListener("click", () => {
-    if (!requireConnection()) return;
-    if (!productsCache.length) { toast("Add at least one product first", true); return; }
-    document.getElementById("formPurchase").reset();
+function openPurchaseModal(id) {
+  if (!requireConnection()) return;
+  if (!id && !productsCache.length) { toast("Add at least one product first", true); return; }
+
+  editingPurchaseId = id || null;
+  editingPurchaseOriginalQty = {};
+  document.getElementById("formPurchase").reset();
+  document.getElementById("puItems").innerHTML = "";
+
+  if (editingPurchaseId) {
+    const header = purchasesCache.find(p => p.id === editingPurchaseId);
+    document.getElementById("purchaseModalTitle").textContent = "Edit purchase bill";
+    document.getElementById("puDealer").value = header.dealer_name;
+    document.getElementById("puDate").value = header.purchase_date;
+    setPayToggle("purchase", header.payment_type);
+
+    sb.from("purchase_items").select("*").eq("purchase_id", editingPurchaseId).then(({ data, error }) => {
+      if (error) { toast("Couldn't load bill items: " + error.message, true); return; }
+      (data || []).forEach(item => {
+        if (header.status === "completed" && item.product_id) {
+          editingPurchaseOriginalQty[item.product_id] = (editingPurchaseOriginalQty[item.product_id] || 0) + item.quantity;
+        }
+        addItemRow("purchase", item);
+      });
+      if (!data || !data.length) addItemRow("purchase");
+      updateBillTotal("purchase");
+    });
+  } else {
+    document.getElementById("purchaseModalTitle").textContent = "Add purchase bill";
     document.getElementById("puDate").valueAsDate = new Date();
     setPayToggle("purchase", "cash");
-    document.getElementById("puItems").innerHTML = "";
     addItemRow("purchase");
     updateBillTotal("purchase");
-    openModal("modalPurchase");
-  });
+  }
+  openModal("modalPurchase");
+}
 
+function bindPurchaseModal() {
+  document.getElementById("btnAddPurchase").addEventListener("click", () => openPurchaseModal(null));
   document.getElementById("puAddItem").addEventListener("click", () => addItemRow("purchase"));
-
   document.querySelectorAll('#modalPurchase .pay-toggle button').forEach(b => {
     b.addEventListener("click", () => setPayToggle("purchase", b.dataset.pay));
   });
-
-  document.getElementById("formPurchase").addEventListener("submit", (e) => { e.preventDefault(); saveBill("purchase"); });
+  document.getElementById("formPurchase").addEventListener("submit", (e) => { e.preventDefault(); saveBill("purchase", "completed"); });
+  document.getElementById("puDraftBtn").addEventListener("click", () => saveBill("purchase", "draft"));
 }
 
 // ==========================================================
@@ -338,7 +417,7 @@ async function loadSales() {
 function renderSales() {
   const tbody = document.getElementById("salesTableBody");
   if (!salesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
     return;
   }
   tbody.innerHTML = salesCache.map(s => `
@@ -346,41 +425,75 @@ function renderSales() {
       <td>${escapeHtml(s.buyer_name)}</td>
       <td>${formatDate(s.sale_date)}</td>
       <td><span class="pill ${s.payment_type}">${s.payment_type}</span></td>
+      <td><span class="pill ${s.status}">${s.status === "draft" ? "Draft" : "Completed"}</span></td>
       <td class="num">${money(s.total_amount)}</td>
-      <td><button class="btn ghost sm" data-action="delete-sale" data-id="${s.id}">Delete</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="icon-btn" data-action="edit-sale" data-id="${s.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
+          <button class="icon-btn danger" data-action="delete-sale" data-id="${s.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+        </div>
+      </td>
     </tr>`).join("");
 
   tbody.querySelectorAll('[data-action="view-sale"]').forEach(row => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest('[data-action="delete-sale"]')) return;
+      if (e.target.closest("button")) return;
       showBillDetail("sale", row.dataset.id);
     });
+  });
+  tbody.querySelectorAll('[data-action="edit-sale"]').forEach(btn => {
+    btn.addEventListener("click", (e) => { e.stopPropagation(); openSaleModal(btn.dataset.id); });
   });
   tbody.querySelectorAll('[data-action="delete-sale"]').forEach(btn => {
     btn.addEventListener("click", (e) => { e.stopPropagation(); deleteBill("sale", btn.dataset.id); });
   });
 }
 
-function bindSaleModal() {
-  document.getElementById("btnAddSale").addEventListener("click", () => {
-    if (!requireConnection()) return;
-    if (!productsCache.length) { toast("Add at least one product first", true); return; }
-    document.getElementById("formSale").reset();
+function openSaleModal(id) {
+  if (!requireConnection()) return;
+  if (!id && !productsCache.length) { toast("Add at least one product first", true); return; }
+
+  editingSaleId = id || null;
+  editingSaleOriginalQty = {};
+  document.getElementById("formSale").reset();
+  document.getElementById("saItems").innerHTML = "";
+
+  if (editingSaleId) {
+    const header = salesCache.find(s => s.id === editingSaleId);
+    document.getElementById("saleModalTitle").textContent = "Edit sale bill";
+    document.getElementById("saBuyer").value = header.buyer_name;
+    document.getElementById("saDate").value = header.sale_date;
+    setPayToggle("sale", header.payment_type);
+
+    sb.from("sale_items").select("*").eq("sale_id", editingSaleId).then(({ data, error }) => {
+      if (error) { toast("Couldn't load bill items: " + error.message, true); return; }
+      (data || []).forEach(item => {
+        if (header.status === "completed" && item.product_id) {
+          editingSaleOriginalQty[item.product_id] = (editingSaleOriginalQty[item.product_id] || 0) + item.quantity;
+        }
+        addItemRow("sale", item);
+      });
+      if (!data || !data.length) addItemRow("sale");
+      updateBillTotal("sale");
+    });
+  } else {
+    document.getElementById("saleModalTitle").textContent = "Add sale bill";
     document.getElementById("saDate").valueAsDate = new Date();
     setPayToggle("sale", "cash");
-    document.getElementById("saItems").innerHTML = "";
     addItemRow("sale");
     updateBillTotal("sale");
-    openModal("modalSale");
-  });
+  }
+  openModal("modalSale");
+}
 
+function bindSaleModal() {
+  document.getElementById("btnAddSale").addEventListener("click", () => openSaleModal(null));
   document.getElementById("saAddItem").addEventListener("click", () => addItemRow("sale"));
-
   document.querySelectorAll('#modalSale .pay-toggle button').forEach(b => {
     b.addEventListener("click", () => setPayToggle("sale", b.dataset.pay));
   });
-
-  document.getElementById("formSale").addEventListener("submit", (e) => { e.preventDefault(); saveBill("sale"); });
+  document.getElementById("formSale").addEventListener("submit", (e) => { e.preventDefault(); saveBill("sale", "completed"); });
+  document.getElementById("saDraftBtn").addEventListener("click", () => saveBill("sale", "draft"));
 }
 
 function setPayToggle(kind, type) {
@@ -395,7 +508,8 @@ function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 // -------- shared line-item row logic for Purchase & Sale --------
 let itemRowSeq = 0;
 
-function addItemRow(kind) {
+// `existing` (optional): a saved purchase_items/sale_items row, when editing
+function addItemRow(kind, existing) {
   const container = document.getElementById(kind === "purchase" ? "puItems" : "saItems");
   const rowId = "row" + (++itemRowSeq);
   const withStyle = kind === "sale";
@@ -413,9 +527,17 @@ function addItemRow(kind) {
     <div><label>Unit price</label><input type="number" data-role="price" min="0" step="0.01" value="0"></div>
     <div><label>Amount</label><div class="item-amount" data-role="amount">₹0.00</div></div>
     <button type="button" class="item-remove" title="Remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    ${kind === "sale" ? `<div class="stock-warn" data-role="warn" style="display:none;"></div>` : ""}
   `;
   container.appendChild(row);
   fillProductDropdowns();
+
+  if (existing) {
+    row.querySelector('[data-role="product"]').value = existing.product_id || "";
+    if (withStyle) row.querySelector('[data-role="style"]').value = existing.style || "";
+    row.querySelector('[data-role="qty"]').value = existing.quantity;
+    row.querySelector('[data-role="price"]').value = existing.unit_price;
+  }
 
   row.querySelector('[data-role="qty"]').addEventListener("input", () => updateRowAmount(row, kind));
   row.querySelector('[data-role="price"]').addEventListener("input", () => updateRowAmount(row, kind));
@@ -428,11 +550,46 @@ function addItemRow(kind) {
   updateRowAmount(row, kind);
 }
 
+// how much of a product is available to sell right now, accounting for
+// the fact that editing a completed sale will first un-reserve its old qty
+function availableForSale(productId) {
+  const p = productsCache.find(p => p.id === productId);
+  const base = p ? p.quantity : 0;
+  const reserved = editingSaleOriginalQty[productId] || 0;
+  return base + reserved;
+}
+
 function updateRowAmount(row, kind) {
   const qty = parseFloat(row.querySelector('[data-role="qty"]').value) || 0;
   const price = parseFloat(row.querySelector('[data-role="price"]').value) || 0;
   const amount = qty * price;
   row.querySelector('[data-role="amount"]').textContent = money(amount);
+
+  if (kind === "sale") {
+    const productId = row.querySelector('[data-role="product"]').value;
+    const qtyInput = row.querySelector('[data-role="qty"]');
+    const warn = row.querySelector('[data-role="warn"]');
+    if (productId) {
+      const available = availableForSale(productId);
+      qtyInput.max = available;
+      if (available <= 0) {
+        warn.style.display = "block";
+        warn.textContent = "Out of stock — this product currently has 0 available.";
+        qtyInput.classList.add("qty-invalid");
+      } else if (qty > available) {
+        warn.style.display = "block";
+        warn.textContent = `Only ${available} left in stock.`;
+        qtyInput.classList.add("qty-invalid");
+      } else {
+        warn.style.display = "none";
+        qtyInput.classList.remove("qty-invalid");
+      }
+    } else {
+      warn.style.display = "none";
+      qtyInput.classList.remove("qty-invalid");
+    }
+  }
+
   updateBillTotal(kind);
 }
 
@@ -447,7 +604,8 @@ function updateBillTotal(kind) {
   document.getElementById(kind === "purchase" ? "puTotal" : "saTotal").textContent = money(total);
 }
 
-async function saveBill(kind) {
+// status: 'draft' or 'completed'
+async function saveBill(kind, status) {
   if (!requireConnection()) return;
   const isPurchase = kind === "purchase";
   const prefix = isPurchase ? "pu" : "sa";
@@ -463,99 +621,86 @@ async function saveBill(kind) {
     const qty = parseInt(row.querySelector('[data-role="qty"]').value, 10) || 0;
     const price = parseFloat(row.querySelector('[data-role="price"]').value) || 0;
     if (qty <= 0) continue;
-    items.push({
+
+    const item = {
       product_id: productId,
       product_name: opt ? opt.dataset.name : "",
-      style: isPurchase ? undefined : (row.querySelector('[data-role="style"]')?.value.trim() || null),
       quantity: qty,
       unit_price: price,
       amount: qty * price
-    });
+    };
+    if (!isPurchase) item.style = row.querySelector('[data-role="style"]')?.value.trim() || "";
+    items.push(item);
   }
 
-  if (!items.length) { toast("Add at least one product with a quantity", true); return; }
+  const nameField = isPurchase ? "puDealer" : "saBuyer";
+  const dateField = isPurchase ? "puDate" : "saDate";
+  const name = document.getElementById(nameField).value.trim();
+  const date = document.getElementById(dateField).value;
 
-  const total = items.reduce((s, i) => s + i.amount, 0);
-  const btn = document.getElementById(prefix + "SubmitBtn");
-  btn.disabled = true; btn.textContent = "Saving…";
+  if (!name) { toast(isPurchase ? "Enter the dealer name" : "Enter the buyer name", true); return; }
+  if (!date) { toast("Pick a date", true); return; }
+  if (status === "completed" && !items.length) { toast("Add at least one product with a quantity", true); return; }
+
+  const submitBtn = document.getElementById(prefix + "SubmitBtn");
+  const draftBtn = document.getElementById(prefix + "DraftBtn");
+  submitBtn.disabled = true; draftBtn.disabled = true;
+  const busyBtn = status === "draft" ? draftBtn : submitBtn;
+  const busyLabel = busyBtn.textContent;
+  busyBtn.textContent = "Saving…";
 
   try {
     if (isPurchase) {
-      const header = {
-        dealer_name: document.getElementById("puDealer").value.trim(),
-        purchase_date: document.getElementById("puDate").value,
-        payment_type: document.getElementById("puPayType").value,
-        total_amount: total
-      };
-      const { data: inserted, error } = await sb.from("purchases").insert(header).select().single();
-      if (error) throw error;
-
-      const lineItems = items.map(i => ({ ...i, purchase_id: inserted.id }));
-      const { error: itemsErr } = await sb.from("purchase_items").insert(lineItems);
-      if (itemsErr) throw itemsErr;
-
-      // increase stock
-      for (const i of items) {
-        const p = productsCache.find(p => p.id === i.product_id);
-        const newQty = (p ? p.quantity : 0) + i.quantity;
-        await sb.from("products").update({ quantity: newQty }).eq("id", i.product_id);
+      const payType = document.getElementById("puPayType").value;
+      if (editingPurchaseId) {
+        const { error } = await sb.rpc("update_purchase", {
+          p_purchase_id: editingPurchaseId, p_dealer_name: name, p_purchase_date: date,
+          p_payment_type: payType, p_status: status, p_items: items
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await sb.rpc("create_purchase", {
+          p_dealer_name: name, p_purchase_date: date, p_payment_type: payType, p_status: status, p_items: items
+        });
+        if (error) throw error;
       }
     } else {
-      const header = {
-        buyer_name: document.getElementById("saBuyer").value.trim(),
-        sale_date: document.getElementById("saDate").value,
-        payment_type: document.getElementById("saPayType").value,
-        total_amount: total
-      };
-      const { data: inserted, error } = await sb.from("sales").insert(header).select().single();
-      if (error) throw error;
-
-      const lineItems = items.map(i => ({ ...i, sale_id: inserted.id }));
-      const { error: itemsErr } = await sb.from("sale_items").insert(lineItems);
-      if (itemsErr) throw itemsErr;
-
-      // decrease stock (floor at 0, warn if it goes negative)
-      let short = false;
-      for (const i of items) {
-        const p = productsCache.find(p => p.id === i.product_id);
-        const newQty = (p ? p.quantity : 0) - i.quantity;
-        if (newQty < 0) short = true;
-        await sb.from("products").update({ quantity: newQty }).eq("id", i.product_id);
+      const payType = document.getElementById("saPayType").value;
+      if (editingSaleId) {
+        const { error } = await sb.rpc("update_sale", {
+          p_sale_id: editingSaleId, p_buyer_name: name, p_sale_date: date,
+          p_payment_type: payType, p_status: status, p_items: items
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await sb.rpc("create_sale", {
+          p_buyer_name: name, p_sale_date: date, p_payment_type: payType, p_status: status, p_items: items
+        });
+        if (error) throw error;
       }
-      if (short) toast("Saved — note: this sold more than was in stock for one or more products", true);
     }
 
-    toast(isPurchase ? "Purchase bill saved" : "Sale bill saved");
+    toast(status === "draft"
+      ? "Saved as draft"
+      : (isPurchase ? "Purchase bill saved" : "Sale bill saved"));
     closeAllModals();
     await refreshAll();
   } catch (err) {
-    toast("Couldn't save bill: " + (err.message || err), true);
+    toast("Couldn't save bill: " + friendlyError(err), true);
   } finally {
-    btn.disabled = false; btn.textContent = isPurchase ? "Save purchase bill" : "Save sale bill";
+    submitBtn.disabled = false; draftBtn.disabled = false;
+    busyBtn.textContent = busyLabel;
   }
 }
 
 async function deleteBill(kind, id) {
   if (!requireConnection()) return;
-  if (!confirm("Delete this bill? Stock quantities will be adjusted back automatically.")) return;
-  const table = kind === "purchase" ? "purchases" : "sales";
-  const itemsTable = kind === "purchase" ? "purchase_items" : "sale_items";
-  const fk = kind === "purchase" ? "purchase_id" : "sale_id";
-
-  const { data: items, error: itemsErr } = await sb.from(itemsTable).select("*").eq(fk, id);
-  if (itemsErr) { toast("Couldn't read bill items: " + itemsErr.message, true); return; }
-
-  // reverse stock effect
-  for (const i of (items || [])) {
-    const p = productsCache.find(p => p.id === i.product_id);
-    if (!p) continue;
-    const delta = kind === "purchase" ? -i.quantity : i.quantity;
-    await sb.from("products").update({ quantity: p.quantity + delta }).eq("id", i.product_id);
-  }
-
-  const { error } = await sb.from(table).delete().eq("id", id);
-  if (error) { toast("Couldn't delete bill: " + error.message, true); return; }
-  toast("Bill deleted, stock adjusted");
+  if (!confirm("Delete this bill? If it was completed, stock quantities will be adjusted back automatically.")) return;
+  const fn = kind === "purchase" ? "delete_purchase" : "delete_sale";
+  const arg = kind === "purchase" ? { p_purchase_id: id } : { p_sale_id: id };
+  const { error } = await sb.rpc(fn, arg);
+  if (error) { toast("Couldn't delete bill: " + friendlyError(error), true); return; }
+  toast("Bill deleted");
   await refreshAll();
 }
 
@@ -572,6 +717,7 @@ async function showBillDetail(kind, id) {
   document.getElementById("detailBody").innerHTML = `
     <div class="breakdown-row"><span>Date</span><strong>${formatDate(header.purchase_date || header.sale_date)}</strong></div>
     <div class="breakdown-row"><span>Payment</span><span class="pill ${header.payment_type}">${header.payment_type}</span></div>
+    <div class="breakdown-row"><span>Status</span><span class="pill ${header.status}">${header.status === "draft" ? "Draft" : "Completed"}</span></div>
     <div class="table-wrap" style="margin-top:12px;">
       <div class="table-scroll">
         <table>
@@ -590,19 +736,29 @@ async function showBillDetail(kind, id) {
     </div>
     <div class="bill-total"><span>Total</span><span>${money(header.total_amount)}</span></div>
   `;
+
+  document.getElementById("detailEditWrap").innerHTML = `<button class="btn block" id="detailEditBtn">Edit this bill</button>`;
+  document.getElementById("detailEditBtn").addEventListener("click", () => {
+    closeAllModals();
+    if (kind === "purchase") openPurchaseModal(id); else openSaleModal(id);
+  });
+
   openModal("modalDetail");
 }
 
 // ==========================================================
-// DASHBOARD
+// DASHBOARD  (only 'completed' bills count toward totals & stock math)
 // ==========================================================
 function renderDashboard() {
   const now = new Date();
   document.getElementById("dashMonthLabel").textContent =
     now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) + " at a glance";
 
-  const monthSales = salesCache.filter(s => isSameMonth(s.sale_date, now));
-  const monthPurchases = purchasesCache.filter(p => isSameMonth(p.purchase_date, now));
+  const completedSales = salesCache.filter(s => s.status === "completed");
+  const completedPurchases = purchasesCache.filter(p => p.status === "completed");
+
+  const monthSales = completedSales.filter(s => isSameMonth(s.sale_date, now));
+  const monthPurchases = completedPurchases.filter(p => isSameMonth(p.purchase_date, now));
 
   const salesCash = sum(monthSales.filter(s => s.payment_type === "cash").map(s => s.total_amount));
   const salesCredit = sum(monthSales.filter(s => s.payment_type === "credit").map(s => s.total_amount));
@@ -626,8 +782,8 @@ function renderDashboard() {
     : `<div class="empty" style="padding:18px;"><strong>All good</strong>No products are running low.</div>`;
 
   const recent = [
-    ...purchasesCache.slice(0, 5).map(p => ({ type: "Purchase", who: p.dealer_name, amount: p.total_amount, date: p.purchase_date, pay: p.payment_type })),
-    ...salesCache.slice(0, 5).map(s => ({ type: "Sale", who: s.buyer_name, amount: s.total_amount, date: s.sale_date, pay: s.payment_type })),
+    ...completedPurchases.slice(0, 5).map(p => ({ type: "Purchase", who: p.dealer_name, amount: p.total_amount, date: p.purchase_date, pay: p.payment_type })),
+    ...completedSales.slice(0, 5).map(s => ({ type: "Sale", who: s.buyer_name, amount: s.total_amount, date: s.sale_date, pay: s.payment_type })),
   ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
 
   const recEl = document.getElementById("recentActivity");
@@ -636,7 +792,7 @@ function renderDashboard() {
         <span>${r.type} — ${escapeHtml(r.who)} <span class="pill ${r.pay}" style="margin-left:6px;">${r.pay}</span></span>
         <strong>${money(r.amount)}</strong>
       </div>`).join("")
-    : `<div class="empty" style="padding:18px;"><strong>Nothing yet</strong>Purchases and sales will show up here.</div>`;
+    : `<div class="empty" style="padding:18px;"><strong>Nothing yet</strong>Completed purchases and sales will show up here.</div>`;
 }
 
 function sum(arr) { return arr.reduce((a, b) => a + Number(b || 0), 0); }

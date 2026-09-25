@@ -271,6 +271,8 @@ td.num, th.num{ text-align:right; font-variant-numeric: tabular-nums; }
 .pill.credit{ background: var(--gold-tint); color: var(--gold); }
 .pill.low{ background: var(--bad-tint); color: var(--bad); }
 .pill.ok{ background: var(--good-tint); color: var(--good); }
+.pill.draft{ background: var(--surface-sunk); color: var(--ink-soft); }
+.pill.completed{ background: var(--good-tint); color: var(--good); }
 
 .search-bar{
   display:flex; gap:10px; margin-bottom: 16px; flex-wrap:wrap;
@@ -335,12 +337,19 @@ td.num, th.num{ text-align:right; font-variant-numeric: tabular-nums; }
 .item-remove{ width:32px; height:32px; border-radius:8px; border:none; background: var(--bad-tint); color:var(--bad); cursor:pointer; display:flex; align-items:center; justify-content:center; }
 .item-remove svg{ width:14px; height:14px; }
 .item-amount{ font-size: 13px; font-weight:700; padding: 8px 0; }
+.item-row .stock-warn{ grid-column: 1 / -1; font-size: 11.5px; color: var(--bad); font-weight:600; margin-top: -4px; }
+.item-row input.qty-invalid{ border-color: var(--bad); background: var(--bad-tint); }
 
 .bill-total{
   display:flex; justify-content:space-between; align-items:center;
   padding: 14px 0 4px; font-family: var(--font-display); font-size: 20px;
 }
 .bill-total span:last-child{ color: var(--primary); }
+
+.modal-actions{ display:flex; gap:10px; margin-top: 10px; }
+.modal-actions .btn{ flex:1; }
+
+.row-actions{ display:flex; gap:6px; justify-content:flex-end; }
 
 .upload-row{ display:flex; align-items:center; gap:12px; }
 .upload-preview{
