@@ -42,6 +42,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       isConnected = true;
       setConnStatus(true, "Connected");
       await refreshAll();
+      setupRealtime();
     } catch (err) {
       console.error(err);
       document.getElementById("setupBanner").style.display = "block";
@@ -72,6 +73,32 @@ async function refreshAll() {
   await loadPurchases();
   await loadSales();
   renderDashboard();
+}
+
+// ---------------------------------------------------------
+// Real-time sync — any device that inserts/updates/deletes a row in these
+// tables triggers every other open tab/device to quietly re-fetch and
+// re-render, with no page reload.
+// ---------------------------------------------------------
+let realtimeRefreshTimer = null;
+function scheduleRealtimeRefresh() {
+  clearTimeout(realtimeRefreshTimer);
+  realtimeRefreshTimer = setTimeout(() => { refreshAll(); }, 400);
+}
+
+function setupRealtime() {
+  const tables = ["products", "purchases", "purchase_items", "sales", "sale_items"];
+  const channel = sb.channel("stock-app-sync");
+  tables.forEach(table => {
+    channel.on("postgres_changes", { event: "*", schema: "public", table }, scheduleRealtimeRefresh);
+  });
+  channel.subscribe((status) => {
+    if (status === "SUBSCRIBED") {
+      setConnStatus(true, "Live sync");
+    } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+      setConnStatus(true, "Connected (no live sync)");
+    }
+  });
 }
 
 // ---------------------------------------------------------
@@ -139,7 +166,6 @@ async function loadProducts() {
   productsCache = data || [];
   renderProducts();
   renderStock();
-  fillProductDropdowns();
 }
 
 function renderProducts() {
@@ -296,15 +322,6 @@ function renderStock() {
       <td><span class="pill ${low ? "low" : "ok"}">${low ? "⚠ Low stock" : "In stock"}</span></td>
     </tr>`;
   }).join("");
-}
-
-function fillProductDropdowns() {
-  document.querySelectorAll(".product-select").forEach(sel => {
-    const current = sel.value;
-    sel.innerHTML = `<option value="">Select product…</option>` +
-      productsCache.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-qty="${p.quantity}">${escapeHtml(p.name)} (${p.quantity} left)</option>`).join("");
-    if (current) sel.value = current;
-  });
 }
 
 // ==========================================================
@@ -518,9 +535,11 @@ function addItemRow(kind, existing) {
   row.className = "item-row" + (withStyle ? " has-style" : "");
   row.dataset.rowId = rowId;
   row.innerHTML = `
-    <div>
+    <div class="combo-wrap">
       <label>Product</label>
-      <select class="product-select" data-role="product"></select>
+      <input type="text" class="combo-input" data-role="product-search" placeholder="Search product…" autocomplete="off">
+      <input type="hidden" data-role="product">
+      <div class="combo-list" data-role="product-list" hidden></div>
     </div>
     ${withStyle ? `<div><label>Style / shade</label><input type="text" data-role="style" placeholder="optional"></div>` : ""}
     <div><label>Qty</label><input type="number" data-role="qty" min="1" value="1"></div>
@@ -530,10 +549,53 @@ function addItemRow(kind, existing) {
     ${kind === "sale" ? `<div class="stock-warn" data-role="warn" style="display:none;"></div>` : ""}
   `;
   container.appendChild(row);
-  fillProductDropdowns();
+
+  const searchInput = row.querySelector('[data-role="product-search"]');
+  const hiddenInput = row.querySelector('[data-role="product"]');
+  const listEl = row.querySelector('[data-role="product-list"]');
+
+  function renderComboList(filterText) {
+    const q = (filterText || "").trim().toLowerCase();
+    const matches = productsCache.filter(p => p.name.toLowerCase().includes(q)).slice(0, 40);
+    listEl.innerHTML = matches.length
+      ? matches.map(p => {
+          const tag = kind === "sale"
+            ? (availableForSale(p.id) <= 0 ? "Out of stock" : `${availableForSale(p.id)} left`)
+            : `${p.quantity} in stock`;
+          return `<div class="combo-item" data-id="${p.id}" data-name="${escapeHtml(p.name)}">
+            <span>${escapeHtml(p.name)}</span><span class="combo-item-qty">${tag}</span>
+          </div>`;
+        }).join("")
+      : `<div class="combo-empty">No matching products</div>`;
+    listEl.hidden = false;
+  }
+
+  searchInput.addEventListener("focus", () => renderComboList(searchInput.value));
+  searchInput.addEventListener("input", () => {
+    hiddenInput.value = "";
+    delete hiddenInput.dataset.name;
+    renderComboList(searchInput.value);
+    updateRowAmount(row, kind);
+  });
+  searchInput.addEventListener("blur", () => {
+    setTimeout(() => { listEl.hidden = true; }, 150);
+  });
+  listEl.addEventListener("mousedown", (e) => {
+    const item = e.target.closest(".combo-item");
+    if (!item) return;
+    hiddenInput.value = item.dataset.id;
+    hiddenInput.dataset.name = item.dataset.name;
+    searchInput.value = item.dataset.name;
+    listEl.hidden = true;
+    updateRowAmount(row, kind);
+  });
 
   if (existing) {
-    row.querySelector('[data-role="product"]').value = existing.product_id || "";
+    const prod = productsCache.find(p => p.id === existing.product_id);
+    const name = existing.product_name || (prod ? prod.name : "");
+    hiddenInput.value = existing.product_id || "";
+    hiddenInput.dataset.name = name;
+    searchInput.value = name;
     if (withStyle) row.querySelector('[data-role="style"]').value = existing.style || "";
     row.querySelector('[data-role="qty"]').value = existing.quantity;
     row.querySelector('[data-role="price"]').value = existing.unit_price;
@@ -541,7 +603,6 @@ function addItemRow(kind, existing) {
 
   row.querySelector('[data-role="qty"]').addEventListener("input", () => updateRowAmount(row, kind));
   row.querySelector('[data-role="price"]').addEventListener("input", () => updateRowAmount(row, kind));
-  row.querySelector('[data-role="product"]').addEventListener("change", () => updateRowAmount(row, kind));
   row.querySelector(".item-remove").addEventListener("click", () => {
     row.remove();
     updateBillTotal(kind);
@@ -614,17 +675,16 @@ async function saveBill(kind, status) {
 
   const items = [];
   for (const row of rows) {
-    const sel = row.querySelector('[data-role="product"]');
-    const productId = sel.value;
+    const hiddenInput = row.querySelector('[data-role="product"]');
+    const productId = hiddenInput.value;
     if (!productId) continue;
-    const opt = sel.selectedOptions[0];
     const qty = parseInt(row.querySelector('[data-role="qty"]').value, 10) || 0;
     const price = parseFloat(row.querySelector('[data-role="price"]').value) || 0;
     if (qty <= 0) continue;
 
     const item = {
       product_id: productId,
-      product_name: opt ? opt.dataset.name : "",
+      product_name: hiddenInput.dataset.name || "",
       quantity: qty,
       unit_price: price,
       amount: qty * price
