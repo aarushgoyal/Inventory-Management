@@ -132,8 +132,15 @@ function isSameMonth(dateStr, ref) {
   return d.getFullYear() === ref.getFullYear() && d.getMonth() === ref.getMonth();
 }
 function friendlyError(err) {
+  if (err && err.code === "23505") return "A product with this name already exists.";
   // Postgres exceptions raised from our RPC functions arrive in err.message
   return (err && (err.message || err.error_description || err.hint)) || String(err);
+}
+function normalizeName(s) { return (s || "").trim().toLowerCase(); }
+function findProductByName(name, excludeId) {
+  const n = normalizeName(name);
+  if (!n) return null;
+  return productsCache.find(p => normalizeName(p.name) === n && p.id !== excludeId);
 }
 
 // ---------------------------------------------------------
@@ -257,10 +264,14 @@ function bindProductModal() {
   document.getElementById("formProduct").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!requireConnection()) return;
+
+    const name = document.getElementById("pName").value.trim();
+    const dup = findProductByName(name, editingProductId);
+    if (dup) { toast(`A product named "${dup.name}" already exists`, true); return; }
+
     const btn = document.getElementById("pSubmitBtn");
     btn.disabled = true; btn.textContent = "Saving…";
     try {
-      const name = document.getElementById("pName").value.trim();
       const file = document.getElementById("pPhoto").files[0];
       let image_url;
 
@@ -376,7 +387,6 @@ function formatDate(d) {
 
 function openPurchaseModal(id) {
   if (!requireConnection()) return;
-  if (!id && !productsCache.length) { toast("Add at least one product first", true); return; }
 
   editingPurchaseId = id || null;
   editingPurchaseOriginalQty = {};
@@ -555,9 +565,10 @@ function addItemRow(kind, existing) {
   const listEl = row.querySelector('[data-role="product-list"]');
 
   function renderComboList(filterText) {
-    const q = (filterText || "").trim().toLowerCase();
+    const raw = filterText || "";
+    const q = raw.trim().toLowerCase();
     const matches = productsCache.filter(p => p.name.toLowerCase().includes(q)).slice(0, 40);
-    listEl.innerHTML = matches.length
+    let html = matches.length
       ? matches.map(p => {
           const tag = kind === "sale"
             ? (availableForSale(p.id) <= 0 ? "Out of stock" : `${availableForSale(p.id)} left`)
@@ -567,7 +578,42 @@ function addItemRow(kind, existing) {
           </div>`;
         }).join("")
       : `<div class="combo-empty">No matching products</div>`;
+
+    // Purchases can introduce a brand-new product on the spot — handy the
+    // very first time, when the Products list is still empty.
+    if (kind === "purchase" && q && !findProductByName(raw)) {
+      html += `<div class="combo-item combo-add" data-add="1">+ Add "${escapeHtml(raw.trim())}" as a new product</div>`;
+    }
+
+    listEl.innerHTML = html;
     listEl.hidden = false;
+  }
+
+  async function quickAddProduct(name) {
+    const existing = findProductByName(name);
+    if (existing) {
+      hiddenInput.value = existing.id;
+      hiddenInput.dataset.name = existing.name;
+      searchInput.value = existing.name;
+      listEl.hidden = true;
+      updateRowAmount(row, kind);
+      return;
+    }
+    listEl.innerHTML = `<div class="combo-empty">Adding product…</div>`;
+    try {
+      const { data, error } = await sb.from("products").insert({ name: name.trim(), quantity: 0 }).select().single();
+      if (error) throw error;
+      await loadProducts();
+      hiddenInput.value = data.id;
+      hiddenInput.dataset.name = data.name;
+      searchInput.value = data.name;
+      listEl.hidden = true;
+      updateRowAmount(row, kind);
+      toast(`Added "${data.name}" — continue with this bill. You can add a photo later in Products.`);
+    } catch (err) {
+      toast("Couldn't add product: " + friendlyError(err), true);
+      listEl.hidden = true;
+    }
   }
 
   searchInput.addEventListener("focus", () => renderComboList(searchInput.value));
@@ -581,6 +627,13 @@ function addItemRow(kind, existing) {
     setTimeout(() => { listEl.hidden = true; }, 150);
   });
   listEl.addEventListener("mousedown", (e) => {
+    e.preventDefault(); // keep focus on the search input so the row doesn't jump
+    const addBtn = e.target.closest(".combo-add");
+    if (addBtn) {
+      if (!requireConnection()) return;
+      quickAddProduct(searchInput.value);
+      return;
+    }
     const item = e.target.closest(".combo-item");
     if (!item) return;
     hiddenInput.value = item.dataset.id;

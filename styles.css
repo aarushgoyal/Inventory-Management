@@ -353,6 +353,8 @@ td.num, th.num{ text-align:right; font-variant-numeric: tabular-nums; }
 .combo-item:hover, .combo-item:active{ background: var(--primary-tint); }
 .combo-item-qty{ font-size: 11px; color: var(--ink-soft); white-space: nowrap; flex-shrink:0; }
 .combo-empty{ padding: 12px; font-size: 13px; color: var(--ink-faint); text-align:center; }
+.combo-item.combo-add{ color: var(--primary-dark); font-weight:700; border-top: 1px dashed var(--line); }
+.combo-item.combo-add:hover{ background: var(--primary-tint); }
 
 .bill-total{
   display:flex; justify-content:space-between; align-items:center;
