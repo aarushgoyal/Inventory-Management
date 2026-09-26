@@ -66,11 +66,44 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindPurchaseModal();
   bindSaleModal();
   bindSearchFilters();
-  document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", closeAllModals));
+  document.querySelectorAll("[data-close]").forEach(b => {
+    b.addEventListener("click", () => {
+      const backdrop = b.closest(".modal-backdrop");
+      handleModalDismiss(backdrop ? backdrop.id : null);
+    });
+  });
   document.querySelectorAll(".modal-backdrop").forEach(m => {
-    m.addEventListener("click", (e) => { if (e.target === m) closeAllModals(); });
+    m.addEventListener("click", (e) => { if (e.target === m) handleModalDismiss(m.id); });
   });
 });
+
+// Closing the Purchase/Sale modal (× button or tapping outside it) without
+// pressing a save button would otherwise silently throw away whatever was
+// typed. For a brand-new bill with real content in it, save it as a draft
+// instead so nothing is lost — the person can finish it later from the
+// Purchases/Sales list. Editing an existing bill just cancels the edit,
+// since the original saved version is untouched either way.
+function handleModalDismiss(modalId) {
+  if (modalId === "modalPurchase") { dismissBillModal("purchase"); return; }
+  if (modalId === "modalSale") { dismissBillModal("sale"); return; }
+  closeAllModals();
+}
+
+function billHasContent(kind) {
+  const nameField = kind === "purchase" ? "puDealer" : "saBuyer";
+  if (document.getElementById(nameField).value.trim()) return true;
+  const container = document.getElementById(kind === "purchase" ? "puItems" : "saItems");
+  return [...container.querySelectorAll(".item-row")].some(row => row.querySelector('[data-role="product"]').value);
+}
+
+async function dismissBillModal(kind) {
+  const isEditing = kind === "purchase" ? !!editingPurchaseId : !!editingSaleId;
+  if (!isEditing && isConnected && billHasContent(kind)) {
+    await saveBill(kind, "draft", { silent: true });
+  } else {
+    closeAllModals();
+  }
+}
 
 function setConnStatus(ok, text) {
   document.getElementById("connStatusText").textContent = text;
@@ -727,8 +760,12 @@ function updateBillTotal(kind) {
   document.getElementById(kind === "purchase" ? "puTotal" : "saTotal").textContent = money(total);
 }
 
-// status: 'draft' or 'completed'
-async function saveBill(kind, status) {
+// status: 'draft' or 'completed'. opts.silent: used when auto-saving a
+// draft on dismiss — skips the "enter a name" style validation toasts and
+// fills in a placeholder name/date instead of blocking the save, since the
+// point is to preserve whatever was typed, not to demand it be complete.
+async function saveBill(kind, status, opts) {
+  opts = opts || {};
   if (!requireConnection()) return;
   const isPurchase = kind === "purchase";
   const prefix = isPurchase ? "pu" : "sa";
@@ -757,12 +794,17 @@ async function saveBill(kind, status) {
 
   const nameField = isPurchase ? "puDealer" : "saBuyer";
   const dateField = isPurchase ? "puDate" : "saDate";
-  const name = document.getElementById(nameField).value.trim();
-  const date = document.getElementById(dateField).value;
+  let name = document.getElementById(nameField).value.trim();
+  let date = document.getElementById(dateField).value;
 
-  if (!name) { toast(isPurchase ? "Enter the dealer name" : "Enter the buyer name", true); return; }
-  if (!date) { toast("Pick a date", true); return; }
-  if (status === "completed" && !items.length) { toast("Add at least one product with a quantity", true); return; }
+  if (!opts.silent) {
+    if (!name) { toast(isPurchase ? "Enter the dealer name" : "Enter the buyer name", true); return; }
+    if (!date) { toast("Pick a date", true); return; }
+    if (status === "completed" && !items.length) { toast("Add at least one product with a quantity", true); return; }
+  } else {
+    if (!name) name = isPurchase ? "Unnamed dealer" : "Unnamed buyer";
+    if (!date) date = new Date().toISOString().slice(0, 10);
+  }
 
   const submitBtn = document.getElementById(prefix + "SubmitBtn");
   const draftBtn = document.getElementById(prefix + "DraftBtn");
@@ -802,9 +844,13 @@ async function saveBill(kind, status) {
       }
     }
 
-    toast(status === "draft"
-      ? "Saved as draft"
-      : (isPurchase ? "Purchase bill saved" : "Sale bill saved"));
+    if (!opts.silent) {
+      toast(status === "draft"
+        ? "Saved as draft"
+        : (isPurchase ? "Purchase bill saved" : "Sale bill saved"));
+    } else {
+      toast("Unfinished bill saved as a draft so nothing was lost");
+    }
     closeAllModals();
     await refreshAll();
   } catch (err) {
