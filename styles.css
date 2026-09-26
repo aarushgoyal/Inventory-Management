@@ -233,6 +233,11 @@ main{
 .breakdown-row > span:first-child{ display:inline-flex; align-items:center; }
 .breakdown-row .dot{ width:9px; height:9px; border-radius:2px; display:inline-block; margin-right:7px; flex-shrink:0; }
 .breakdown-row .tag{ font-size: 11.5px; font-weight:700; padding: 2px 8px; border-radius:999px; }
+.breakdown-row.total-row{
+  border-top: 1px solid var(--line); border-bottom: none;
+  margin-top: 2px; padding-top: 11px; font-weight: 700;
+}
+.breakdown-row.total-row strong{ color: var(--primary-dark); font-size: 15px; }
 .tag.cash{ background: var(--good-tint); color: var(--good); }
 .tag.credit{ background: var(--gold-tint); color: var(--gold); }
 

@@ -1096,20 +1096,11 @@ function renderDashboard() {
   document.getElementById("statSalesCredit").textContent = money(salesCredit);
   document.getElementById("statPurchaseCash").textContent = money(purchaseCash);
   document.getElementById("statPurchaseCredit").textContent = money(purchaseCredit);
+  document.getElementById("statSalesTotal").textContent = money(salesCash + salesCredit);
+  document.getElementById("statPurchaseTotal").textContent = money(purchaseCash + purchaseCredit);
 
   renderDonut("salesDonut", "salesDonutChart", salesCash, salesCredit, ["#2F7D56", "#8FCDA9"]);
   renderDonut("purchaseDonut", "purchaseDonutChart", purchaseCash, purchaseCredit, ["#B8862E", "#E4C578"]);
-
-  document.getElementById("ovTotalSales").textContent = money(salesCash + salesCredit);
-  document.getElementById("ovTotalPurchase").textContent = money(purchaseCash + purchaseCredit);
-  document.getElementById("ovBillCount").textContent = String(scopeSales.length + scopePurchases.length);
-  document.getElementById("ovProductCount").textContent = String(productsCache.length);
-
-  const low = productsCache.filter(p => p.quantity <= LOW_STOCK_THRESHOLD).sort((a, b) => a.quantity - b.quantity);
-  const lowEl = document.getElementById("lowStockList");
-  lowEl.innerHTML = low.length
-    ? low.map(p => `<div class="breakdown-row"><span>${escapeHtml(p.name)}</span><span class="pill low">${p.quantity} left</span></div>`).join("")
-    : `<div class="empty" style="padding:18px;"><strong>All good</strong>No products are running low.</div>`;
 
   // Monthly sales trend and recent activity always reflect full history,
   // independent of the month/all-time toggle above.
