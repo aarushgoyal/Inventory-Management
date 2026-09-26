@@ -21,12 +21,21 @@ let editingSaleId = null;
 let editingPurchaseOriginalQty = {};
 let editingSaleOriginalQty = {};
 
+// Dashboard state
+let dashScope = "month";   // 'month' | 'all'
+let dashDate = new Date(); // which month is showing when dashScope === 'month'
+const dashCharts = { salesDonut: null, purchaseDonut: null, salesTrend: null };
+if (typeof Chart !== "undefined" && typeof ChartDataLabels !== "undefined") {
+  Chart.register(ChartDataLabels);
+}
+
 // ---------------------------------------------------------
 // Init
 // ---------------------------------------------------------
 document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("puDate").valueAsDate = new Date();
   document.getElementById("saDate").valueAsDate = new Date();
+  bindDashboardControls();
 
   const configured = SUPABASE_URL && !SUPABASE_URL.includes("YOUR-PROJECT-ID") &&
                       SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes("YOUR-ANON");
@@ -862,30 +871,170 @@ async function showBillDetail(kind, id) {
 // ==========================================================
 // DASHBOARD  (only 'completed' bills count toward totals & stock math)
 // ==========================================================
+function bindDashboardControls() {
+  document.getElementById("dashPrevMonth").addEventListener("click", () => {
+    dashDate = new Date(dashDate.getFullYear(), dashDate.getMonth() - 1, 1);
+    renderDashboard();
+  });
+  document.getElementById("dashNextMonth").addEventListener("click", () => {
+    dashDate = new Date(dashDate.getFullYear(), dashDate.getMonth() + 1, 1);
+    renderDashboard();
+  });
+  document.getElementById("dashScopeMonthBtn").addEventListener("click", () => {
+    dashScope = "month";
+    renderDashboard();
+  });
+  document.getElementById("dashScopeAllBtn").addEventListener("click", () => {
+    dashScope = "all";
+    renderDashboard();
+  });
+}
+
+function shortMoney(v) {
+  const n = Number(v || 0);
+  if (n >= 100000) return "₹" + (n / 100000).toFixed(n % 100000 ? 1 : 0) + "L";
+  if (n >= 1000) return "₹" + (n / 1000).toFixed(n % 1000 ? 1 : 0) + "k";
+  return money(n);
+}
+
+function renderDonut(key, canvasId, cashVal, creditVal, colors) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || typeof Chart === "undefined") return;
+  if (dashCharts[key]) dashCharts[key].destroy();
+  const bothZero = !cashVal && !creditVal;
+  dashCharts[key] = new Chart(canvas, {
+    type: "doughnut",
+    data: {
+      labels: ["Cash", "Credit"],
+      datasets: [{ data: bothZero ? [1, 0] : [cashVal, creditVal], backgroundColor: bothZero ? ["#EBDEDC", "#EBDEDC"] : colors, borderWidth: 0 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "70%",
+      plugins: {
+        legend: { display: false },
+        datalabels: { display: false },
+        tooltip: { enabled: !bothZero, callbacks: { label: (ctx) => `${ctx.label}: ${money(ctx.parsed)}` } }
+      }
+    }
+  });
+}
+
+function renderSalesTrendChart(completedSales) {
+  const canvas = document.getElementById("salesTrendChart");
+  if (!canvas || typeof Chart === "undefined") return;
+
+  const totalsByMonth = {};
+  completedSales.forEach(s => {
+    const d = new Date(s.sale_date);
+    const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    totalsByMonth[key] = (totalsByMonth[key] || 0) + Number(s.total_amount || 0);
+  });
+  const keys = Object.keys(totalsByMonth).sort();
+  const labels = keys.map(k => {
+    const [y, m] = k.split("-");
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
+  });
+  const data = keys.map(k => totalsByMonth[k]);
+
+  if (dashCharts.salesTrend) dashCharts.salesTrend.destroy();
+  const maxVal = data.length ? Math.max(...data) : 0;
+  dashCharts.salesTrend = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: labels.length ? labels : ["No sales yet"],
+      datasets: [{
+        data: data.length ? data : [0],
+        borderColor: "#A6285C", backgroundColor: "rgba(166,40,92,0.08)",
+        fill: true, tension: 0.35, borderWidth: 2,
+        pointRadius: 4, pointBackgroundColor: "#A6285C", pointBorderColor: "#fff", pointBorderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      layout: { padding: { top: 26 } },
+      plugins: {
+        legend: { display: false },
+        datalabels: {
+          display: data.length > 0,
+          align: "top", anchor: "end", offset: 6,
+          color: "#241619", font: { size: 10, weight: "600" },
+          formatter: v => shortMoney(v)
+        }
+      },
+      scales: {
+        y: {
+          suggestedMax: maxVal ? maxVal * 1.18 : 10,
+          ticks: { callback: v => shortMoney(v), color: "#A98D92" },
+          grid: { color: "#EBDEDC" }
+        },
+        x: { ticks: { color: "#A98D92" }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+function renderRecentActivity(completedPurchases, completedSales) {
+  const recent = [
+    ...completedPurchases.slice(0, 8).map(p => ({ type: "Purchase", who: p.dealer_name, amount: p.total_amount, date: p.purchase_date, pay: p.payment_type, kind: "purchase", id: p.id })),
+    ...completedSales.slice(0, 8).map(s => ({ type: "Sale", who: s.buyer_name, amount: s.total_amount, date: s.sale_date, pay: s.payment_type, kind: "sale", id: s.id })),
+  ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
+
+  const recEl = document.getElementById("recentActivity");
+  recEl.innerHTML = recent.length
+    ? recent.map(r => `<div class="activity-row" data-kind="${r.kind}" data-id="${r.id}">
+        <span>${r.type} — ${escapeHtml(r.who)} <span class="pill ${r.pay}" style="margin-left:6px;">${r.pay}</span></span>
+        <span class="right"><strong>${money(r.amount)}</strong>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        </span>
+      </div>`).join("")
+    : `<div class="empty" style="padding:18px;"><strong>Nothing yet</strong>Completed purchases and sales will show up here.</div>`;
+
+  recEl.querySelectorAll(".activity-row").forEach(row => {
+    row.addEventListener("click", () => showBillDetail(row.dataset.kind, row.dataset.id));
+  });
+}
+
 function renderDashboard() {
   const now = new Date();
-  document.getElementById("dashMonthLabel").textContent =
-    now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) + " at a glance";
+  const isCurrentMonth = dashDate.getFullYear() === now.getFullYear() && dashDate.getMonth() === now.getMonth();
+
+  document.getElementById("dashScopeMonthBtn").classList.toggle("active", dashScope === "month");
+  document.getElementById("dashScopeAllBtn").classList.toggle("active", dashScope === "all");
+  document.getElementById("dashMonthNav").classList.toggle("hidden", dashScope === "all");
+  document.getElementById("dashNextMonth").disabled = isCurrentMonth;
+  document.getElementById("dashMonthNavLabel").textContent = dashDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 
   const completedSales = salesCache.filter(s => s.status === "completed");
   const completedPurchases = purchasesCache.filter(p => p.status === "completed");
 
-  const monthSales = completedSales.filter(s => isSameMonth(s.sale_date, now));
-  const monthPurchases = completedPurchases.filter(p => isSameMonth(p.purchase_date, now));
+  let scopeSales, scopePurchases;
+  if (dashScope === "all") {
+    scopeSales = completedSales;
+    scopePurchases = completedPurchases;
+    document.getElementById("dashMonthLabel").textContent = "All-time totals since your first bill";
+  } else {
+    scopeSales = completedSales.filter(s => isSameMonth(s.sale_date, dashDate));
+    scopePurchases = completedPurchases.filter(p => isSameMonth(p.purchase_date, dashDate));
+    document.getElementById("dashMonthLabel").textContent =
+      dashDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" }) + "'s business at a glance";
+  }
 
-  const salesCash = sum(monthSales.filter(s => s.payment_type === "cash").map(s => s.total_amount));
-  const salesCredit = sum(monthSales.filter(s => s.payment_type === "credit").map(s => s.total_amount));
-  const purchaseCash = sum(monthPurchases.filter(p => p.payment_type === "cash").map(p => p.total_amount));
-  const purchaseCredit = sum(monthPurchases.filter(p => p.payment_type === "credit").map(p => p.total_amount));
+  const salesCash = sum(scopeSales.filter(s => s.payment_type === "cash").map(s => s.total_amount));
+  const salesCredit = sum(scopeSales.filter(s => s.payment_type === "credit").map(s => s.total_amount));
+  const purchaseCash = sum(scopePurchases.filter(p => p.payment_type === "cash").map(p => p.total_amount));
+  const purchaseCredit = sum(scopePurchases.filter(p => p.payment_type === "credit").map(p => p.total_amount));
 
   document.getElementById("statSalesCash").textContent = money(salesCash);
   document.getElementById("statSalesCredit").textContent = money(salesCredit);
   document.getElementById("statPurchaseCash").textContent = money(purchaseCash);
   document.getElementById("statPurchaseCredit").textContent = money(purchaseCredit);
 
+  renderDonut("salesDonut", "salesDonutChart", salesCash, salesCredit, ["#2F7D56", "#8FCDA9"]);
+  renderDonut("purchaseDonut", "purchaseDonutChart", purchaseCash, purchaseCredit, ["#B8862E", "#E4C578"]);
+
   document.getElementById("ovTotalSales").textContent = money(salesCash + salesCredit);
   document.getElementById("ovTotalPurchase").textContent = money(purchaseCash + purchaseCredit);
-  document.getElementById("ovBillCount").textContent = String(monthSales.length + monthPurchases.length);
+  document.getElementById("ovBillCount").textContent = String(scopeSales.length + scopePurchases.length);
   document.getElementById("ovProductCount").textContent = String(productsCache.length);
 
   const low = productsCache.filter(p => p.quantity <= LOW_STOCK_THRESHOLD).sort((a, b) => a.quantity - b.quantity);
@@ -894,18 +1043,10 @@ function renderDashboard() {
     ? low.map(p => `<div class="breakdown-row"><span>${escapeHtml(p.name)}</span><span class="pill low">${p.quantity} left</span></div>`).join("")
     : `<div class="empty" style="padding:18px;"><strong>All good</strong>No products are running low.</div>`;
 
-  const recent = [
-    ...completedPurchases.slice(0, 5).map(p => ({ type: "Purchase", who: p.dealer_name, amount: p.total_amount, date: p.purchase_date, pay: p.payment_type })),
-    ...completedSales.slice(0, 5).map(s => ({ type: "Sale", who: s.buyer_name, amount: s.total_amount, date: s.sale_date, pay: s.payment_type })),
-  ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 6);
-
-  const recEl = document.getElementById("recentActivity");
-  recEl.innerHTML = recent.length
-    ? recent.map(r => `<div class="breakdown-row">
-        <span>${r.type} — ${escapeHtml(r.who)} <span class="pill ${r.pay}" style="margin-left:6px;">${r.pay}</span></span>
-        <strong>${money(r.amount)}</strong>
-      </div>`).join("")
-    : `<div class="empty" style="padding:18px;"><strong>Nothing yet</strong>Completed purchases and sales will show up here.</div>`;
+  // Monthly sales trend and recent activity always reflect full history,
+  // independent of the month/all-time toggle above.
+  renderSalesTrendChart(completedSales);
+  renderRecentActivity(completedPurchases, completedSales);
 }
 
 function sum(arr) { return arr.reduce((a, b) => a + Number(b || 0), 0); }

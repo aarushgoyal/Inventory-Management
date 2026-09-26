@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 
@@ -60,32 +60,58 @@
 
   <!-- ================= DASHBOARD ================= -->
   <section class="view active" id="view-dashboard">
-    <div class="view-head">
-      <div>
-        <h2>Dashboard</h2>
-        <p id="dashMonthLabel">This month's business at a glance</p>
+    <div class="dash-header">
+      <h2>Dashboard</h2>
+      <div class="dash-controls">
+        <div class="seg">
+          <button type="button" class="seg-btn active" id="dashScopeMonthBtn">This month</button>
+          <button type="button" class="seg-btn" id="dashScopeAllBtn">All-time</button>
+        </div>
+        <div class="month-nav" id="dashMonthNav">
+          <button type="button" class="month-nav-btn" id="dashPrevMonth" aria-label="Previous month">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <span id="dashMonthNavLabel">Month</span>
+          <button type="button" class="month-nav-btn" id="dashNextMonth" aria-label="Next month">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+          </button>
+        </div>
       </div>
     </div>
+    <p class="dash-hint" id="dashMonthLabel">This month's business at a glance</p>
 
-    <div class="grid-stats">
-      <div class="stat sales"><div class="label">Sales — Cash</div><div class="value" id="statSalesCash">₹0</div></div>
-      <div class="stat sales"><div class="label">Sales — Credit</div><div class="value" id="statSalesCredit">₹0</div></div>
-      <div class="stat purchase"><div class="label">Purchases — Cash</div><div class="value" id="statPurchaseCash">₹0</div></div>
-      <div class="stat purchase"><div class="label">Purchases — Credit</div><div class="value" id="statPurchaseCredit">₹0</div></div>
+    <div class="panel-split">
+      <div class="panel">
+        <h3>Sales</h3>
+        <div class="donut-wrap"><canvas id="salesDonutChart"></canvas></div>
+        <div class="breakdown-row"><span><span class="dot" style="background:#2F7D56;"></span>Cash</span><strong id="statSalesCash">₹0</strong></div>
+        <div class="breakdown-row"><span><span class="dot" style="background:#8FCDA9;"></span>Credit</span><strong id="statSalesCredit">₹0</strong></div>
+      </div>
+      <div class="panel">
+        <h3>Purchases</h3>
+        <div class="donut-wrap"><canvas id="purchaseDonutChart"></canvas></div>
+        <div class="breakdown-row"><span><span class="dot" style="background:#B8862E;"></span>Cash</span><strong id="statPurchaseCash">₹0</strong></div>
+        <div class="breakdown-row"><span><span class="dot" style="background:#E4C578;"></span>Credit</span><strong id="statPurchaseCredit">₹0</strong></div>
+      </div>
     </div>
 
     <div class="panel-split">
       <div class="panel">
         <h3>Overview</h3>
-        <div class="breakdown-row"><span>Total sales this month</span><strong id="ovTotalSales">₹0</strong></div>
-        <div class="breakdown-row"><span>Total purchases this month</span><strong id="ovTotalPurchase">₹0</strong></div>
-        <div class="breakdown-row"><span>Bills raised this month</span><strong id="ovBillCount">0</strong></div>
+        <div class="breakdown-row"><span>Total sales</span><strong id="ovTotalSales">₹0</strong></div>
+        <div class="breakdown-row"><span>Total purchases</span><strong id="ovTotalPurchase">₹0</strong></div>
+        <div class="breakdown-row"><span>Bills raised</span><strong id="ovBillCount">0</strong></div>
         <div class="breakdown-row"><span>Products tracked</span><strong id="ovProductCount">0</strong></div>
       </div>
       <div class="panel">
         <h3>Low stock alert</h3>
         <div id="lowStockList"></div>
       </div>
+    </div>
+
+    <div class="panel">
+      <h3>Total sales by month</h3>
+      <div class="trend-wrap"><canvas id="salesTrendChart"></canvas></div>
     </div>
 
     <div class="panel">
@@ -283,7 +309,9 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

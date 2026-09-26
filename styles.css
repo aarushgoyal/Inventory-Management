@@ -182,14 +182,56 @@ main{
   margin-bottom: 18px;
 }
 .panel h3{ font-size: 16px; margin-bottom: 12px; }
-.panel-split{ display:grid; gap: 14px; grid-template-columns: 1fr; }
+.panel-split{ display:grid; gap: 14px; grid-template-columns: 1fr; margin-bottom: 18px; }
 @media (min-width: 760px){ .panel-split{ grid-template-columns: 1fr 1fr; } }
+
+/* Dashboard header: title + scope toggle + month navigator */
+.dash-header{
+  display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
+  margin-bottom: 4px;
+}
+.dash-controls{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dash-hint{ margin: 0 0 18px; color: var(--ink-soft); font-size: 13px; }
+
+.seg{ display:flex; background: var(--surface-sunk); border-radius: var(--radius-s); padding: 3px; }
+.seg-btn{ border:none; background:transparent; font-size:12.5px; font-weight:700; color: var(--ink-soft); padding: 7px 13px; border-radius: 7px; cursor:pointer; }
+.seg-btn.active{ background:#fff; color: var(--primary-dark); box-shadow: 0 1px 2px rgba(36,22,25,0.08); }
+
+.month-nav{
+  display:flex; align-items:center; gap:8px;
+  background: var(--surface-sunk); border-radius: var(--radius-s); padding: 6px 6px;
+}
+.month-nav span{ font-size:13px; font-weight:600; min-width: 128px; text-align:center; }
+.month-nav-btn{
+  border:none; background:transparent; cursor:pointer; width:26px; height:26px; border-radius:7px;
+  display:flex; align-items:center; justify-content:center; color: var(--ink-soft);
+}
+.month-nav-btn:hover:not(:disabled){ background:#fff; color: var(--primary-dark); }
+.month-nav-btn svg{ width:15px; height:15px; }
+.month-nav-btn:disabled{ opacity:.35; cursor:not-allowed; }
+.month-nav.hidden{ display:none; }
+
+.donut-wrap{ position:relative; height:150px; margin-bottom: 8px; }
+.trend-wrap{ position:relative; height:250px; }
+
+/* Recent activity — clickable rows */
+.activity-row{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding: 11px 6px; border-bottom: 1px dashed var(--line); font-size: 14px;
+  cursor:pointer; border-radius: 8px;
+}
+.activity-row:last-child{ border-bottom:none; }
+.activity-row:hover{ background: var(--surface-sunk); }
+.activity-row .right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.activity-row .chev{ width:15px; height:15px; color: var(--ink-faint); }
 
 .breakdown-row{
   display:flex; justify-content:space-between; align-items:center;
   padding: 9px 0; border-bottom: 1px dashed var(--line); font-size: 14px;
 }
 .breakdown-row:last-child{ border-bottom:none; }
+.breakdown-row > span:first-child{ display:inline-flex; align-items:center; }
+.breakdown-row .dot{ width:9px; height:9px; border-radius:2px; display:inline-block; margin-right:7px; flex-shrink:0; }
 .breakdown-row .tag{ font-size: 11.5px; font-weight:700; padding: 2px 8px; border-radius:999px; }
 .tag.cash{ background: var(--good-tint); color: var(--good); }
 .tag.credit{ background: var(--gold-tint); color: var(--gold); }
