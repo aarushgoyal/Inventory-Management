@@ -96,13 +96,33 @@ function billHasContent(kind) {
   return [...container.querySelectorAll(".item-row")].some(row => row.querySelector('[data-role="product"]').value);
 }
 
+function billHasValidItem(kind) {
+  const container = document.getElementById(kind === "purchase" ? "puItems" : "saItems");
+  return [...container.querySelectorAll(".item-row")].some(row => {
+    const productId = row.querySelector('[data-role="product"]').value;
+    const qty = parseInt(row.querySelector('[data-role="qty"]').value, 10) || 0;
+    return productId && qty > 0;
+  });
+}
+
 async function dismissBillModal(kind) {
+  if (!isConnected || !billHasContent(kind)) { closeAllModals(); return; }
+
   const isEditing = kind === "purchase" ? !!editingPurchaseId : !!editingSaleId;
-  if (!isEditing && isConnected && billHasContent(kind)) {
-    await saveBill(kind, "draft", { silent: true });
-  } else {
-    closeAllModals();
+  let statusToSave = "draft";
+  if (isEditing) {
+    const header = kind === "purchase"
+      ? purchasesCache.find(p => p.id === editingPurchaseId)
+      : salesCache.find(s => s.id === editingSaleId);
+    statusToSave = header ? header.status : "draft";
   }
+
+  // Never silently save a "completed" bill with no product lines left in it
+  // — that would wipe out its stock effect with nothing to replace it.
+  // Fall back to a draft in that edge case so the edit is still preserved.
+  if (statusToSave === "completed" && !billHasValidItem(kind)) statusToSave = "draft";
+
+  await saveBill(kind, statusToSave, { silent: true });
 }
 
 function setConnStatus(ok, text) {
@@ -849,7 +869,9 @@ async function saveBill(kind, status, opts) {
         ? "Saved as draft"
         : (isPurchase ? "Purchase bill saved" : "Sale bill saved"));
     } else {
-      toast("Unfinished bill saved as a draft so nothing was lost");
+      toast(status === "completed"
+        ? (isPurchase ? "Purchase bill updated — changes saved" : "Sale bill updated — changes saved")
+        : "Unfinished bill saved as a draft so nothing was lost");
     }
     closeAllModals();
     await refreshAll();
