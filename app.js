@@ -747,7 +747,12 @@ function handleScanResult(code) {
   if (scannerKind === "product-field") {
     document.getElementById("pBarcode").value = code;
     closeScanner();
-    toast("Barcode captured");
+    const dup = findProductByBarcode(code, editingProductId);
+    if (dup) {
+      toast(`This barcode is already used by "${dup.name}"`, true);
+    } else {
+      toast("Barcode captured");
+    }
     return;
   }
 
