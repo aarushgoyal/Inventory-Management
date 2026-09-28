@@ -758,17 +758,16 @@ function openScanner(kind) {
 // needed several tries before.
 function barcodeHints() {
   const hints = new Map();
+
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-    // QR codes and Data Matrix — what your products actually use (see the
-    // gold-cap label with the QR code and "47697" underneath)
-    ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX,
-    // Classic 1D retail barcodes, kept in case some products use these instead
-    ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
-    ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
-    ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
-    ZXing.BarcodeFormat.ITF
+    ZXing.BarcodeFormat.QR_CODE,
+    ZXing.BarcodeFormat.EAN_13,
+    ZXing.BarcodeFormat.EAN_8,
+    ZXing.BarcodeFormat.UPC_A,
+    ZXing.BarcodeFormat.UPC_E,
+    ZXing.BarcodeFormat.CODE_128
   ]);
-  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
   return hints;
 }
 
@@ -785,20 +784,19 @@ async function startScannerCamera() {
     if (!devices.length) throw new Error("No camera found on this device.");
     const backCam = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1];
 
-    // A moderate resolution decodes faster per frame than asking for full
-    // HD (more pixels = more work for the decoder on every frame), and
-    // continuous autofocus matters more than raw resolution for reading a
-    // small QR code or barcode up close.
     const constraints = {
       video: {
         deviceId: { exact: backCam.deviceId },
+        facingMode: { ideal: "environment" },
         width: { ideal: 1280 },
         height: { ideal: 720 },
-        advanced: [{ focusMode: "continuous" }]
+        frameRate: { ideal: 30, max: 30 }
       }
     };
     await scannerReader.decodeFromConstraints(constraints, "scannerVideo", (result) => {
       if (scannerBusy || !result) return;
+
+      scannerBusy = true;
       handleScanResult(result.getText());
     });
   } catch (err) {
