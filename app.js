@@ -43,6 +43,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindDashboardControls();
   bindScanner();
   bindPageExitSafety();
+  bindRecycleBin();
 
   const configured = SUPABASE_URL && !SUPABASE_URL.includes("YOUR-PROJECT-ID") &&
                       SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes("YOUR-ANON");
@@ -259,6 +260,10 @@ function bindNav() {
       const view = btn.dataset.view;
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       document.getElementById("view-" + view).classList.add("active");
+      // Always pull fresh numbers when switching tabs — guarantees Stock,
+      // Products, and Dashboard never show a stale quantity after a bill
+      // was saved, whatever the cause of a delay might have been.
+      if (isConnected) refreshAll();
     });
   });
 }
@@ -453,7 +458,7 @@ function renderStock() {
 // PURCHASES
 // ==========================================================
 async function loadPurchases() {
-  const { data, error } = await sb.from("purchases").select("*").order("purchase_date", { ascending: false }).order("created_at", { ascending: false });
+  const { data, error } = await sb.from("purchases").select("*").is("deleted_at", null).order("purchase_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) { toast("Couldn't load purchases: " + error.message, true); return; }
   purchasesCache = data || [];
   renderPurchases();
@@ -502,8 +507,10 @@ function formatDate(d) {
 function openPurchaseModal(id) {
   if (!requireConnection()) return;
 
+  loadProducts(); // refresh the "X left" numbers shown next to product names
   editingPurchaseId = id || null;
   editingPurchaseOriginalQty = {};
+  removedItemsPurchase = [];
   document.getElementById("formPurchase").reset();
   document.getElementById("puItems").innerHTML = "";
 
@@ -550,7 +557,7 @@ function bindPurchaseModal() {
 // SALES
 // ==========================================================
 async function loadSales() {
-  const { data, error } = await sb.from("sales").select("*").order("sale_date", { ascending: false }).order("created_at", { ascending: false });
+  const { data, error } = await sb.from("sales").select("*").is("deleted_at", null).order("sale_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) { toast("Couldn't load sales: " + error.message, true); return; }
   salesCache = data || [];
   renderSales();
@@ -595,8 +602,10 @@ function openSaleModal(id) {
   if (!requireConnection()) return;
   if (!id && !productsCache.length) { toast("Add at least one product first", true); return; }
 
+  loadProducts(); // refresh the "X left" numbers shown next to product names
   editingSaleId = id || null;
   editingSaleOriginalQty = {};
+  removedItemsSale = [];
   document.getElementById("formSale").reset();
   document.getElementById("saItems").innerHTML = "";
 
@@ -750,6 +759,10 @@ function openScanner(kind) {
 function barcodeHints() {
   const hints = new Map();
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+    // QR codes and Data Matrix — what your products actually use (see the
+    // gold-cap label with the QR code and "47697" underneath)
+    ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX,
+    // Classic 1D retail barcodes, kept in case some products use these instead
     ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
     ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
     ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
@@ -761,19 +774,27 @@ function barcodeHints() {
 
 async function startScannerCamera() {
   try {
-    scannerReader = new ZXing.BrowserMultiFormatReader(barcodeHints());
+    // Second constructor argument is the pause after a SUCCESSFUL decode
+    // before scanning again — short, since our own "scannerBusy" flag
+    // already takes over from there while the found/not-found panel shows.
+    scannerReader = new ZXing.BrowserMultiFormatReader(barcodeHints(), 100);
+    if ("timeBetweenDecodingAttempts" in scannerReader) {
+      scannerReader.timeBetweenDecodingAttempts = 0; // no artificial delay between frame attempts
+    }
     const devices = await scannerReader.listVideoInputDevices();
     if (!devices.length) throw new Error("No camera found on this device.");
     const backCam = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1];
 
-    // Asking for a sharper, higher-resolution feed (instead of whatever
-    // low default the browser might pick) gives the decoder a much better
-    // chance on the first try, especially on small/dense barcodes.
+    // A moderate resolution decodes faster per frame than asking for full
+    // HD (more pixels = more work for the decoder on every frame), and
+    // continuous autofocus matters more than raw resolution for reading a
+    // small QR code or barcode up close.
     const constraints = {
       video: {
         deviceId: { exact: backCam.deviceId },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        advanced: [{ focusMode: "continuous" }]
       }
     };
     await scannerReader.decodeFromConstraints(constraints, "scannerVideo", (result) => {
@@ -881,6 +902,12 @@ function addOrIncrementScannedItem(kind, productId, productName, qty, price) {
 
 // -------- shared line-item row logic for Purchase & Sale --------
 let itemRowSeq = 0;
+
+// Lines that existed in a saved bill and were removed during this edit
+// session — archived into the Recycle Bin when the bill is saved, so
+// nothing just vanishes. Reset each time a bill modal is opened.
+let removedItemsPurchase = [];
+let removedItemsSale = [];
 
 // `existing` (optional): a saved purchase_items/sale_items row, when editing
 function addItemRow(kind, existing) {
@@ -999,11 +1026,27 @@ function addItemRow(kind, existing) {
     if (withStyle) row.querySelector('[data-role="style"]').value = existing.style || "";
     row.querySelector('[data-role="qty"]').value = existing.quantity;
     row.querySelector('[data-role="price"]').value = existing.unit_price;
+    // Only a row loaded from a saved bill (has a real database id) can be
+    // "removed" in the Recycle Bin sense — a freshly-added row has nothing
+    // saved yet to recover.
+    if (existing.id) row.dataset.origId = existing.id;
   }
 
   row.querySelector('[data-role="qty"]').addEventListener("input", () => updateRowAmount(row, kind));
   row.querySelector('[data-role="price"]').addEventListener("input", () => updateRowAmount(row, kind));
   row.querySelector(".item-remove").addEventListener("click", () => {
+    if (row.dataset.origId) {
+      const removedEntry = {
+        product_id: hiddenInput.value || null,
+        product_name: hiddenInput.dataset.name || "",
+        quantity: parseInt(row.querySelector('[data-role="qty"]').value, 10) || 0,
+        unit_price: parseFloat(row.querySelector('[data-role="price"]').value) || 0
+      };
+      removedEntry.amount = removedEntry.quantity * removedEntry.unit_price;
+      if (kind === "sale") removedEntry.style = row.querySelector('[data-role="style"]')?.value.trim() || "";
+      if (kind === "purchase") removedItemsPurchase.push(removedEntry);
+      else removedItemsSale.push(removedEntry);
+    }
     row.remove();
     updateBillTotal(kind);
   });
@@ -1131,9 +1174,10 @@ async function saveBill(kind, status, opts) {
       if (editingPurchaseId) {
         const { error } = await sb.rpc("update_purchase", {
           p_purchase_id: editingPurchaseId, p_dealer_name: name, p_purchase_date: date,
-          p_payment_type: payType, p_status: status, p_items: items
+          p_payment_type: payType, p_status: status, p_items: items, p_removed_items: removedItemsPurchase
         });
         if (error) throw error;
+        removedItemsPurchase = []; // archived server-side — don't resend on a later save
       } else {
         const { data, error } = await sb.rpc("create_purchase", {
           p_dealer_name: name, p_purchase_date: date, p_payment_type: payType, p_status: status, p_items: items
@@ -1149,9 +1193,10 @@ async function saveBill(kind, status, opts) {
       if (editingSaleId) {
         const { error } = await sb.rpc("update_sale", {
           p_sale_id: editingSaleId, p_buyer_name: name, p_sale_date: date,
-          p_payment_type: payType, p_status: status, p_items: items
+          p_payment_type: payType, p_status: status, p_items: items, p_removed_items: removedItemsSale
         });
         if (error) throw error;
+        removedItemsSale = [];
       } else {
         const { data, error } = await sb.rpc("create_sale", {
           p_buyer_name: name, p_sale_date: date, p_payment_type: payType, p_status: status, p_items: items
@@ -1185,12 +1230,12 @@ async function saveBill(kind, status, opts) {
 
 async function deleteBill(kind, id) {
   if (!requireConnection()) return;
-  if (!confirm("Delete this bill? If it was completed, stock quantities will be adjusted back automatically.")) return;
+  if (!confirm("Move this bill to the recycle bin? If it was completed, stock quantities will be adjusted back automatically. You can recover it later from the recycle bin.")) return;
   const fn = kind === "purchase" ? "delete_purchase" : "delete_sale";
   const arg = kind === "purchase" ? { p_purchase_id: id } : { p_sale_id: id };
   const { error } = await sb.rpc(fn, arg);
   if (error) { toast("Couldn't delete bill: " + friendlyError(error), true); return; }
-  toast("Bill deleted");
+  toast("Bill moved to the recycle bin");
   await refreshAll();
 }
 
@@ -1234,6 +1279,112 @@ async function showBillDetail(kind, id) {
   });
 
   openModal("modalDetail");
+}
+
+// ==========================================================
+// RECYCLE BIN — whole deleted bills, and line items removed from a bill
+// ==========================================================
+function bindRecycleBin() {
+  document.getElementById("btnRecycleBin").addEventListener("click", openRecycleBin);
+  document.getElementById("binTabBills").addEventListener("click", () => setBinTab("bills"));
+  document.getElementById("binTabItems").addEventListener("click", () => setBinTab("items"));
+}
+
+function setBinTab(tab) {
+  document.getElementById("binTabBills").classList.toggle("active", tab === "bills");
+  document.getElementById("binTabItems").classList.toggle("active", tab === "items");
+  document.getElementById("binBillsList").style.display = tab === "bills" ? "" : "none";
+  document.getElementById("binItemsList").style.display = tab === "items" ? "" : "none";
+  document.getElementById("binHint").textContent = tab === "bills"
+    ? "Whole bills you deleted. Recovering one puts it back exactly as it was."
+    : "Products you removed from a bill while editing it. Recovering one adds it back to that same bill.";
+}
+
+async function openRecycleBin() {
+  if (!requireConnection()) return;
+  setBinTab("bills");
+  openModal("modalRecycleBin");
+  await loadRecycleBin();
+}
+
+async function loadRecycleBin() {
+  const [pRes, sRes, iRes] = await Promise.all([
+    sb.from("purchases").select("*").not("deleted_at", "is", null).order("deleted_at", { ascending: false }),
+    sb.from("sales").select("*").not("deleted_at", "is", null).order("deleted_at", { ascending: false }),
+    sb.from("deleted_line_items").select("*").order("deleted_at", { ascending: false })
+  ]);
+  if (pRes.error || sRes.error || iRes.error) {
+    toast("Couldn't load the recycle bin — make sure you've run the latest schema.sql", true);
+    return;
+  }
+
+  const bills = [
+    ...(pRes.data || []).map(p => ({ kind: "purchase", id: p.id, label: p.dealer_name, date: p.purchase_date, amount: p.total_amount, pay: p.payment_type, deletedAt: p.deleted_at })),
+    ...(sRes.data || []).map(x => ({ kind: "sale", id: x.id, label: x.buyer_name, date: x.sale_date, amount: x.total_amount, pay: x.payment_type, deletedAt: x.deleted_at })),
+  ].sort((a, b) => new Date(b.deletedAt) - new Date(a.deletedAt));
+
+  const billsEl = document.getElementById("binBillsList");
+  billsEl.innerHTML = bills.length
+    ? bills.map(b => `<div class="bin-row">
+        <span>${cap(b.kind)} — ${escapeHtml(b.label)} <span class="pill ${b.pay}" style="margin-left:6px;">${b.pay}</span>
+          <span class="sub">${formatDate(b.date)}</span></span>
+        <span class="right"><strong>${money(b.amount)}</strong>
+          <button class="btn subtle sm" data-action="recover-bill" data-kind="${b.kind}" data-id="${b.id}">Recover</button>
+        </span>
+      </div>`).join("")
+    : `<div class="empty" style="padding:18px;"><strong>Nothing here</strong>Deleted bills will show up here.</div>`;
+  billsEl.querySelectorAll('[data-action="recover-bill"]').forEach(btn => {
+    btn.addEventListener("click", () => recoverBill(btn.dataset.kind, btn.dataset.id));
+  });
+
+  const items = iRes.data || [];
+  const itemsEl = document.getElementById("binItemsList");
+  itemsEl.innerHTML = items.length
+    ? items.map(i => `<div class="bin-row">
+        <span>${escapeHtml(i.product_name)} × ${i.quantity}
+          <span class="sub">From ${cap(i.bill_type)} — ${escapeHtml(i.bill_label)}${i.bill_date ? " (" + formatDate(i.bill_date) + ")" : ""}</span></span>
+        <span class="right"><strong>${money(i.amount)}</strong>
+          <button class="btn subtle sm" data-action="recover-item" data-id="${i.id}">Recover</button>
+          <button class="icon-btn danger" data-action="purge-item" data-id="${i.id}" title="Discard for good">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </span>
+      </div>`).join("")
+    : `<div class="empty" style="padding:18px;"><strong>Nothing here</strong>Products removed from a bill will show up here.</div>`;
+  itemsEl.querySelectorAll('[data-action="recover-item"]').forEach(btn => {
+    btn.addEventListener("click", () => recoverLineItem(btn.dataset.id));
+  });
+  itemsEl.querySelectorAll('[data-action="purge-item"]').forEach(btn => {
+    btn.addEventListener("click", () => purgeLineItem(btn.dataset.id));
+  });
+}
+
+async function recoverBill(kind, id) {
+  if (!requireConnection()) return;
+  const fn = kind === "purchase" ? "recover_purchase" : "recover_sale";
+  const arg = kind === "purchase" ? { p_purchase_id: id } : { p_sale_id: id };
+  const { error } = await sb.rpc(fn, arg);
+  if (error) { toast("Couldn't recover: " + friendlyError(error), true); return; }
+  toast("Bill recovered");
+  await refreshAll();
+  await loadRecycleBin();
+}
+
+async function recoverLineItem(id) {
+  if (!requireConnection()) return;
+  const { error } = await sb.rpc("recover_deleted_line_item", { p_id: id });
+  if (error) { toast("Couldn't recover: " + friendlyError(error), true); return; }
+  toast("Product added back to its bill");
+  await refreshAll();
+  await loadRecycleBin();
+}
+
+async function purgeLineItem(id) {
+  if (!requireConnection()) return;
+  if (!confirm("Discard this removed product for good? It can't be recovered afterwards.")) return;
+  const { error } = await sb.rpc("purge_deleted_line_item", { p_id: id });
+  if (error) { toast("Couldn't discard: " + friendlyError(error), true); return; }
+  await loadRecycleBin();
 }
 
 // ==========================================================

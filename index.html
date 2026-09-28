@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
 
@@ -21,9 +21,14 @@
       <div class="sub">Oriflame — Sub-Dealer</div>
     </div>
   </div>
-  <div class="status-pill">
-    <span class="status-dot off" id="connStatusDot"></span>
-    <span id="connStatusText">Connecting…</span>
+  <div class="topbar-right">
+    <button type="button" class="topbar-btn" id="btnRecycleBin" title="Recycle bin" aria-label="Recycle bin">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+    </button>
+    <div class="status-pill">
+      <span class="status-dot off" id="connStatusDot"></span>
+      <span id="connStatusText">Connecting…</span>
+    </div>
   </div>
 </header>
 
@@ -308,6 +313,20 @@
 </div>
 
 <!-- ================= MODAL: BILL DETAIL (view purchase/sale line items) ================= -->
+<!-- ================= MODAL: RECYCLE BIN ================= -->
+<div class="modal-backdrop" id="modalRecycleBin">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-head"><h3>Recycle bin</h3><button class="modal-close" data-close><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <div class="seg" style="margin-bottom:14px;">
+      <button type="button" class="seg-btn active" id="binTabBills">Deleted bills</button>
+      <button type="button" class="seg-btn" id="binTabItems">Removed products</button>
+    </div>
+    <p class="hint" id="binHint" style="margin:0 0 10px;">Whole bills you deleted. Recovering one puts it back exactly as it was.</p>
+    <div id="binBillsList"></div>
+    <div id="binItemsList" style="display:none;"></div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modalDetail">
   <div class="modal">
     <div class="modal-head"><h3 id="detailTitle">Bill</h3><button class="modal-close" data-close><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
@@ -371,6 +390,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=11"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

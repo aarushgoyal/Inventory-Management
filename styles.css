@@ -514,3 +514,23 @@ td.num, th.num{ text-align:right; font-variant-numeric: tabular-nums; }
 }
 .scanner-panel-title{ font-size:15px; font-weight:600; color: var(--ink); margin-bottom: 14px; }
 .scanner-panel-title strong{ color: var(--primary-dark); }
+
+/* ==========================================================
+   Recycle bin
+   ========================================================== */
+.topbar-right{ display:flex; align-items:center; gap:10px; }
+.topbar-btn{
+  width:32px; height:32px; border-radius:50%; border:none; cursor:pointer;
+  background: rgba(255,255,255,0.16); color:#fff;
+  display:flex; align-items:center; justify-content:center;
+}
+.topbar-btn:hover{ background: rgba(255,255,255,0.26); }
+.topbar-btn svg{ width:16px; height:16px; }
+
+.bin-row{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding: 11px 4px; border-bottom: 1px dashed var(--line); font-size: 14px;
+}
+.bin-row:last-child{ border-bottom:none; }
+.bin-row .right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.bin-row .sub{ display:block; font-size:12px; color: var(--ink-faint); margin-top:2px; }
