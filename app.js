@@ -10,6 +10,8 @@ let isConnected = false;
 let productsCache = [];  // [{id,name,image_url,quantity}]
 let purchasesCache = []; // header rows, newest first
 let salesCache = [];     // header rows, newest first
+let purchaseItemCounts = {}; // purchase_id -> number of line items
+let saleItemCounts = {};     // sale_id -> number of line items
 
 let editingProductId = null;
 let editingPurchaseId = null;
@@ -44,6 +46,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindScanner();
   bindPageExitSafety();
   bindRecycleBin();
+  const sideBin = document.getElementById("btnRecycleBinSide");
+  if (sideBin) sideBin.addEventListener("click", () => document.getElementById("btnRecycleBin")?.click());
 
   const configured = SUPABASE_URL && !SUPABASE_URL.includes("YOUR-PROJECT-ID") &&
                       SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes("YOUR-ANON");
@@ -268,10 +272,37 @@ function bindNav() {
   });
 }
 
+let activeProductFilter = "all";
 function bindSearchFilters() {
   document.getElementById("productSearch").addEventListener("input", renderProducts);
   document.getElementById("stockSearch").addEventListener("input", renderStock);
   document.getElementById("stockFilter").addEventListener("change", renderStock);
+  document.querySelectorAll("[data-product-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeProductFilter = btn.dataset.productFilter;
+      document.querySelectorAll("[data-product-filter]").forEach(b => b.classList.toggle("active", b === btn));
+      renderProducts();
+    });
+  });
+}
+function openView(view) {
+  const btn = document.querySelector(`.nav-btn[data-view="${view}"]`);
+  if (btn) btn.click();
+}
+function quickSearchApp(value) {
+  const q = String(value || "").trim();
+  if (!q) return;
+  const productView = document.querySelector('.nav-btn[data-view="products"]');
+  if (productView && !document.getElementById("view-products").classList.contains("active")) productView.click();
+  const input = document.getElementById("productSearch");
+  if (input) { input.value = q; renderProducts(); }
+}
+function exportStockCsv() {
+  const rows = [["Product","Quantity","Stock value","Status"]];
+  productsCache.forEach(p => rows.push([p.name, p.quantity, Number(p.quantity || 0), p.quantity === 0 ? "Out of stock" : p.quantity <= LOW_STOCK_THRESHOLD ? "Low stock" : "In stock"]));
+  const csv = rows.map(r => r.map(v => `"${String(v ?? "").replaceAll('"','""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "stock-export.csv"; a.click(); URL.revokeObjectURL(a.href);
 }
 
 // ==========================================================
@@ -288,7 +319,10 @@ async function loadProducts() {
 function renderProducts() {
   const grid = document.getElementById("productsGrid");
   const q = document.getElementById("productSearch").value.trim().toLowerCase();
-  const list = productsCache.filter(p => p.name.toLowerCase().includes(q));
+  let list = productsCache.filter(p => p.name.toLowerCase().includes(q));
+  if (activeProductFilter === "active") list = list.filter(p => Number(p.quantity) > LOW_STOCK_THRESHOLD);
+  if (activeProductFilter === "low") list = list.filter(p => Number(p.quantity) > 0 && Number(p.quantity) <= LOW_STOCK_THRESHOLD);
+  if (activeProductFilter === "out") list = list.filter(p => Number(p.quantity) === 0);
 
   if (!list.length) {
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1;"><strong>No products yet</strong>Add your first Oriflame product to start tracking stock.</div>`;
@@ -432,24 +466,34 @@ function renderStock() {
   const tbody = document.getElementById("stockTableBody");
   const q = document.getElementById("stockSearch").value.trim().toLowerCase();
   const filter = document.getElementById("stockFilter").value;
-
   let list = productsCache.filter(p => p.name.toLowerCase().includes(q));
-  if (filter === "low") list = list.filter(p => p.quantity <= LOW_STOCK_THRESHOLD);
+  if (filter === "low") list = list.filter(p => Number(p.quantity) > 0 && Number(p.quantity) <= LOW_STOCK_THRESHOLD);
+  if (filter === "out") list = list.filter(p => Number(p.quantity) === 0);
+
+  const totalUnits = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
+  const lowCount = productsCache.filter(p => Number(p.quantity || 0) <= LOW_STOCK_THRESHOLD).length;
+  const stockValue = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
+  const set = (id, value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
+  set("stockSummaryProducts", productsCache.length);
+  set("stockSummaryUnits", totalUnits);
+  set("stockSummaryValue", money(stockValue));
+  set("stockSummaryLow", lowCount);
 
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="3"><div class="empty"><strong>Nothing to show</strong>Try a different search or filter.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty"><strong>Nothing to show</strong>Try a different search or filter.</div></td></tr>`;
     return;
   }
-
   tbody.innerHTML = list.map(p => {
-    const low = p.quantity <= LOW_STOCK_THRESHOLD;
+    const qty = Number(p.quantity || 0);
+    const low = qty > 0 && qty <= LOW_STOCK_THRESHOLD;
+    const out = qty === 0;
+    const status = out ? "Out of stock" : low ? "Low stock" : "In stock";
     return `<tr>
-      <td class="name-cell">
-        ${p.image_url ? `<img class="row-thumb" src="${escapeHtml(p.image_url)}">` : ""}
-        ${escapeHtml(p.name)}
-      </td>
-      <td class="num" style="${low ? "color:var(--bad); font-weight:700;" : ""}">${p.quantity}</td>
-      <td><span class="pill ${low ? "low" : "ok"}">${low ? "⚠ Low stock" : "In stock"}</span></td>
+      <td class="name-cell">${p.image_url ? `<img class="row-thumb" src="${escapeHtml(p.image_url)}" alt="">` : `<span class="row-thumb placeholder-thumb">◈</span>`}<div><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.barcode || "No barcode")}</small></div></td>
+      <td><strong class="stock-number ${out ? "out" : low ? "low" : ""}">${qty}</strong> units</td>
+      <td>${money(qty)}</td>
+      <td><span class="pill ${out ? "draft" : low ? "low" : "ok"}">${out ? "Out of stock" : low ? "⚠ Low stock" : "In stock"}</span></td>
+      <td><button class="icon-btn" title="Edit product" onclick="openProductModal('${p.id}')">✎</button></td>
     </tr>`;
   }).join("");
 }
@@ -461,22 +505,58 @@ async function loadPurchases() {
   const { data, error } = await sb.from("purchases").select("*").is("deleted_at", null).order("purchase_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) { toast("Couldn't load purchases: " + error.message, true); return; }
   purchasesCache = data || [];
+
+  // Load line-item counts in one query so the modern table can show the
+  // number of products on each bill without changing the existing schema.
+  purchaseItemCounts = {};
+  if (purchasesCache.length) {
+    const ids = purchasesCache.map(p => p.id);
+    const { data: itemRows, error: itemError } = await sb
+      .from("purchase_items")
+      .select("purchase_id")
+      .in("purchase_id", ids);
+    if (!itemError) {
+      (itemRows || []).forEach(row => {
+        purchaseItemCounts[row.purchase_id] = (purchaseItemCounts[row.purchase_id] || 0) + 1;
+      });
+    }
+  }
   renderPurchases();
+}
+
+function getDisplayBillNo(kind, bill, bills) {
+  // If a future schema contains a real bill_no, always prefer it.
+  if (bill && bill.bill_no) return String(bill.bill_no);
+
+  // Current database has no bill_no column, so create a deterministic
+  // display number from creation order. This does not modify the database.
+  const sorted = [...bills].sort((a, b) => {
+    const ca = new Date(a.created_at || 0).getTime();
+    const cb = new Date(b.created_at || 0).getTime();
+    if (ca !== cb) return ca - cb;
+    return String(a.id).localeCompare(String(b.id));
+  });
+  const index = Math.max(0, sorted.findIndex(x => x.id === bill.id)) + 1;
+  const date = kind === "purchase" ? bill.purchase_date : bill.sale_date;
+  const year = date ? String(date).slice(0, 4) : String(new Date().getFullYear());
+  return `${kind === "purchase" ? "P" : "S"}-${year}-${String(index).padStart(4, "0")}`;
 }
 
 function renderPurchases() {
   const tbody = document.getElementById("purchasesTableBody");
   if (!purchasesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
     return;
   }
   tbody.innerHTML = purchasesCache.map(p => `
     <tr style="cursor:pointer;" data-action="view-purchase" data-id="${p.id}">
-      <td>${escapeHtml(p.dealer_name)}</td>
+      <td><strong>${escapeHtml(getDisplayBillNo("purchase", p, purchasesCache))}</strong></td>
       <td>${formatDate(p.purchase_date)}</td>
+      <td>${escapeHtml(p.dealer_name)}</td>
+      <td>${purchaseItemCounts[p.id] || 0}</td>
+      <td class="num">${money(p.total_amount)}</td>
       <td><span class="pill ${p.payment_type}">${p.payment_type}</span></td>
       <td><span class="pill ${p.status}">${p.status === "draft" ? "Draft" : "Completed"}</span></td>
-      <td class="num">${money(p.total_amount)}</td>
       <td>
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
@@ -560,26 +640,43 @@ async function loadSales() {
   const { data, error } = await sb.from("sales").select("*").is("deleted_at", null).order("sale_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) { toast("Couldn't load sales: " + error.message, true); return; }
   salesCache = data || [];
+
+  // Load line-item counts in one query for the modern Sales table.
+  saleItemCounts = {};
+  if (salesCache.length) {
+    const ids = salesCache.map(s => s.id);
+    const { data: itemRows, error: itemError } = await sb
+      .from("sale_items")
+      .select("sale_id")
+      .in("sale_id", ids);
+    if (!itemError) {
+      (itemRows || []).forEach(row => {
+        saleItemCounts[row.sale_id] = (saleItemCounts[row.sale_id] || 0) + 1;
+      });
+    }
+  }
   renderSales();
 }
 
 function renderSales() {
   const tbody = document.getElementById("salesTableBody");
   if (!salesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
     return;
   }
   tbody.innerHTML = salesCache.map(s => `
     <tr style="cursor:pointer;" data-action="view-sale" data-id="${s.id}">
-      <td>${escapeHtml(s.buyer_name)}</td>
+      <td><strong>${escapeHtml(getDisplayBillNo("sale", s, salesCache))}</strong></td>
       <td>${formatDate(s.sale_date)}</td>
+      <td>${escapeHtml(s.buyer_name)}</td>
+      <td>${saleItemCounts[s.id] || 0}</td>
+      <td class="num">${money(s.total_amount)}</td>
       <td><span class="pill ${s.payment_type}">${s.payment_type}</span></td>
       <td><span class="pill ${s.status}">${s.status === "draft" ? "Draft" : "Completed"}</span></td>
-      <td class="num">${money(s.total_amount)}</td>
       <td>
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-sale" data-id="${s.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
-          <button class="icon-btn danger" data-action="delete-sale" data-id="${s.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+          <button class="icon-btn danger" data-action="delete-sale" data-id="${s.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
         </div>
       </td>
     </tr>`).join("");
@@ -1247,7 +1344,9 @@ async function showBillDetail(kind, id) {
   document.getElementById("detailTitle").textContent =
     kind === "purchase" ? `Purchase — ${header.dealer_name}` : `Sale — ${header.buyer_name}`;
 
+  const detailBillNo = getDisplayBillNo(kind, header, kind === "purchase" ? purchasesCache : salesCache);
   document.getElementById("detailBody").innerHTML = `
+    <div class="breakdown-row"><span>Bill No.</span><strong>${escapeHtml(detailBillNo)}</strong></div>
     <div class="breakdown-row"><span>Date</span><strong>${formatDate(header.purchase_date || header.sale_date)}</strong></div>
     <div class="breakdown-row"><span>Payment</span><span class="pill ${header.payment_type}">${header.payment_type}</span></div>
     <div class="breakdown-row"><span>Status</span><span class="pill ${header.status}">${header.status === "draft" ? "Draft" : "Completed"}</span></div>
@@ -1555,6 +1654,23 @@ function renderDashboard() {
   // independent of the month/all-time toggle above.
   renderSalesTrendChart(completedSales);
   renderRecentActivity(completedPurchases, completedSales);
+
+  const dashboardSales = salesCash + salesCredit;
+  const dashboardPurchases = purchaseCash + purchaseCredit;
+  const lowCount = productsCache.filter(p => Number(p.quantity || 0) <= LOW_STOCK_THRESHOLD).length;
+  const stockValue = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
+  const setDash = (id, value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
+  setDash("statDashboardSales", money(dashboardSales));
+  setDash("statDashboardPurchases", money(dashboardPurchases));
+  setDash("statStockValue", money(stockValue));
+  setDash("statProductsCount", productsCache.length);
+  setDash("statLowStockCount", lowCount);
+  setDash("purchaseCountLabel", purchasesCache.length);
+  setDash("purchaseCompletedLabel", purchasesCache.filter(p => p.status === "completed").length);
+  setDash("purchaseDraftLabel", purchasesCache.filter(p => p.status === "draft").length);
+  setDash("salesCountLabel", salesCache.length);
+  setDash("salesCompletedLabel", salesCache.filter(s => s.status === "completed").length);
+  setDash("salesDraftLabel", salesCache.filter(s => s.status === "draft").length);
 }
 
 function sum(arr) { return arr.reduce((a, b) => a + Number(b || 0), 0); }
