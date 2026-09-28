@@ -1,3 +1,4 @@
+
 // ==========================================================
 // Oriflame Sub-Dealer Stock Manager — app logic
 // ==========================================================
@@ -10,8 +11,6 @@ let isConnected = false;
 let productsCache = [];  // [{id,name,image_url,quantity}]
 let purchasesCache = []; // header rows, newest first
 let salesCache = [];     // header rows, newest first
-let purchaseItemCounts = {}; // purchase_id -> number of line items
-let saleItemCounts = {};     // sale_id -> number of line items
 
 let editingProductId = null;
 let editingPurchaseId = null;
@@ -505,58 +504,22 @@ async function loadPurchases() {
   const { data, error } = await sb.from("purchases").select("*").is("deleted_at", null).order("purchase_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) { toast("Couldn't load purchases: " + error.message, true); return; }
   purchasesCache = data || [];
-
-  // Load line-item counts in one query so the modern table can show the
-  // number of products on each bill without changing the existing schema.
-  purchaseItemCounts = {};
-  if (purchasesCache.length) {
-    const ids = purchasesCache.map(p => p.id);
-    const { data: itemRows, error: itemError } = await sb
-      .from("purchase_items")
-      .select("purchase_id")
-      .in("purchase_id", ids);
-    if (!itemError) {
-      (itemRows || []).forEach(row => {
-        purchaseItemCounts[row.purchase_id] = (purchaseItemCounts[row.purchase_id] || 0) + 1;
-      });
-    }
-  }
   renderPurchases();
-}
-
-function getDisplayBillNo(kind, bill, bills) {
-  // If a future schema contains a real bill_no, always prefer it.
-  if (bill && bill.bill_no) return String(bill.bill_no);
-
-  // Current database has no bill_no column, so create a deterministic
-  // display number from creation order. This does not modify the database.
-  const sorted = [...bills].sort((a, b) => {
-    const ca = new Date(a.created_at || 0).getTime();
-    const cb = new Date(b.created_at || 0).getTime();
-    if (ca !== cb) return ca - cb;
-    return String(a.id).localeCompare(String(b.id));
-  });
-  const index = Math.max(0, sorted.findIndex(x => x.id === bill.id)) + 1;
-  const date = kind === "purchase" ? bill.purchase_date : bill.sale_date;
-  const year = date ? String(date).slice(0, 4) : String(new Date().getFullYear());
-  return `${kind === "purchase" ? "P" : "S"}-${year}-${String(index).padStart(4, "0")}`;
 }
 
 function renderPurchases() {
   const tbody = document.getElementById("purchasesTableBody");
   if (!purchasesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
     return;
   }
   tbody.innerHTML = purchasesCache.map(p => `
     <tr style="cursor:pointer;" data-action="view-purchase" data-id="${p.id}">
-      <td><strong>${escapeHtml(getDisplayBillNo("purchase", p, purchasesCache))}</strong></td>
-      <td>${formatDate(p.purchase_date)}</td>
       <td>${escapeHtml(p.dealer_name)}</td>
-      <td>${purchaseItemCounts[p.id] || 0}</td>
-      <td class="num">${money(p.total_amount)}</td>
+      <td>${formatDate(p.purchase_date)}</td>
       <td><span class="pill ${p.payment_type}">${p.payment_type}</span></td>
       <td><span class="pill ${p.status}">${p.status === "draft" ? "Draft" : "Completed"}</span></td>
+      <td class="num">${money(p.total_amount)}</td>
       <td>
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
@@ -640,43 +603,26 @@ async function loadSales() {
   const { data, error } = await sb.from("sales").select("*").is("deleted_at", null).order("sale_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) { toast("Couldn't load sales: " + error.message, true); return; }
   salesCache = data || [];
-
-  // Load line-item counts in one query for the modern Sales table.
-  saleItemCounts = {};
-  if (salesCache.length) {
-    const ids = salesCache.map(s => s.id);
-    const { data: itemRows, error: itemError } = await sb
-      .from("sale_items")
-      .select("sale_id")
-      .in("sale_id", ids);
-    if (!itemError) {
-      (itemRows || []).forEach(row => {
-        saleItemCounts[row.sale_id] = (saleItemCounts[row.sale_id] || 0) + 1;
-      });
-    }
-  }
   renderSales();
 }
 
 function renderSales() {
   const tbody = document.getElementById("salesTableBody");
   if (!salesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
     return;
   }
   tbody.innerHTML = salesCache.map(s => `
     <tr style="cursor:pointer;" data-action="view-sale" data-id="${s.id}">
-      <td><strong>${escapeHtml(getDisplayBillNo("sale", s, salesCache))}</strong></td>
-      <td>${formatDate(s.sale_date)}</td>
       <td>${escapeHtml(s.buyer_name)}</td>
-      <td>${saleItemCounts[s.id] || 0}</td>
-      <td class="num">${money(s.total_amount)}</td>
+      <td>${formatDate(s.sale_date)}</td>
       <td><span class="pill ${s.payment_type}">${s.payment_type}</span></td>
       <td><span class="pill ${s.status}">${s.status === "draft" ? "Draft" : "Completed"}</span></td>
+      <td class="num">${money(s.total_amount)}</td>
       <td>
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-sale" data-id="${s.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
-          <button class="icon-btn danger" data-action="delete-sale" data-id="${s.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+          <button class="icon-btn danger" data-action="delete-sale" data-id="${s.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
         </div>
       </td>
     </tr>`).join("");
@@ -1344,9 +1290,7 @@ async function showBillDetail(kind, id) {
   document.getElementById("detailTitle").textContent =
     kind === "purchase" ? `Purchase — ${header.dealer_name}` : `Sale — ${header.buyer_name}`;
 
-  const detailBillNo = getDisplayBillNo(kind, header, kind === "purchase" ? purchasesCache : salesCache);
   document.getElementById("detailBody").innerHTML = `
-    <div class="breakdown-row"><span>Bill No.</span><strong>${escapeHtml(detailBillNo)}</strong></div>
     <div class="breakdown-row"><span>Date</span><strong>${formatDate(header.purchase_date || header.sale_date)}</strong></div>
     <div class="breakdown-row"><span>Payment</span><span class="pill ${header.payment_type}">${header.payment_type}</span></div>
     <div class="breakdown-row"><span>Status</span><span class="pill ${header.status}">${header.status === "draft" ? "Draft" : "Completed"}</span></div>
@@ -1674,3 +1618,4 @@ function renderDashboard() {
 }
 
 function sum(arr) { return arr.reduce((a, b) => a + Number(b || 0), 0); }
+
