@@ -1,3 +1,4 @@
+
 // ==========================================================
 // Oriflame Sub-Dealer Stock Manager — app logic
 // ==========================================================
@@ -44,6 +45,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindScanner();
   bindPageExitSafety();
   bindRecycleBin();
+  const sideBin = document.getElementById("btnRecycleBinSide");
+  if (sideBin) sideBin.addEventListener("click", () => document.getElementById("btnRecycleBin")?.click());
 
   const configured = SUPABASE_URL && !SUPABASE_URL.includes("YOUR-PROJECT-ID") &&
                       SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes("YOUR-ANON");
@@ -268,10 +271,37 @@ function bindNav() {
   });
 }
 
+let activeProductFilter = "all";
 function bindSearchFilters() {
   document.getElementById("productSearch").addEventListener("input", renderProducts);
   document.getElementById("stockSearch").addEventListener("input", renderStock);
   document.getElementById("stockFilter").addEventListener("change", renderStock);
+  document.querySelectorAll("[data-product-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeProductFilter = btn.dataset.productFilter;
+      document.querySelectorAll("[data-product-filter]").forEach(b => b.classList.toggle("active", b === btn));
+      renderProducts();
+    });
+  });
+}
+function openView(view) {
+  const btn = document.querySelector(`.nav-btn[data-view="${view}"]`);
+  if (btn) btn.click();
+}
+function quickSearchApp(value) {
+  const q = String(value || "").trim();
+  if (!q) return;
+  const productView = document.querySelector('.nav-btn[data-view="products"]');
+  if (productView && !document.getElementById("view-products").classList.contains("active")) productView.click();
+  const input = document.getElementById("productSearch");
+  if (input) { input.value = q; renderProducts(); }
+}
+function exportStockCsv() {
+  const rows = [["Product","Quantity","Stock value","Status"]];
+  productsCache.forEach(p => rows.push([p.name, p.quantity, Number(p.quantity || 0), p.quantity === 0 ? "Out of stock" : p.quantity <= LOW_STOCK_THRESHOLD ? "Low stock" : "In stock"]));
+  const csv = rows.map(r => r.map(v => `"${String(v ?? "").replaceAll('"','""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "stock-export.csv"; a.click(); URL.revokeObjectURL(a.href);
 }
 
 // ==========================================================
@@ -288,7 +318,10 @@ async function loadProducts() {
 function renderProducts() {
   const grid = document.getElementById("productsGrid");
   const q = document.getElementById("productSearch").value.trim().toLowerCase();
-  const list = productsCache.filter(p => p.name.toLowerCase().includes(q));
+  let list = productsCache.filter(p => p.name.toLowerCase().includes(q));
+  if (activeProductFilter === "active") list = list.filter(p => Number(p.quantity) > LOW_STOCK_THRESHOLD);
+  if (activeProductFilter === "low") list = list.filter(p => Number(p.quantity) > 0 && Number(p.quantity) <= LOW_STOCK_THRESHOLD);
+  if (activeProductFilter === "out") list = list.filter(p => Number(p.quantity) === 0);
 
   if (!list.length) {
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1;"><strong>No products yet</strong>Add your first Oriflame product to start tracking stock.</div>`;
@@ -432,24 +465,34 @@ function renderStock() {
   const tbody = document.getElementById("stockTableBody");
   const q = document.getElementById("stockSearch").value.trim().toLowerCase();
   const filter = document.getElementById("stockFilter").value;
-
   let list = productsCache.filter(p => p.name.toLowerCase().includes(q));
-  if (filter === "low") list = list.filter(p => p.quantity <= LOW_STOCK_THRESHOLD);
+  if (filter === "low") list = list.filter(p => Number(p.quantity) > 0 && Number(p.quantity) <= LOW_STOCK_THRESHOLD);
+  if (filter === "out") list = list.filter(p => Number(p.quantity) === 0);
+
+  const totalUnits = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
+  const lowCount = productsCache.filter(p => Number(p.quantity || 0) <= LOW_STOCK_THRESHOLD).length;
+  const stockValue = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
+  const set = (id, value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
+  set("stockSummaryProducts", productsCache.length);
+  set("stockSummaryUnits", totalUnits);
+  set("stockSummaryValue", money(stockValue));
+  set("stockSummaryLow", lowCount);
 
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="3"><div class="empty"><strong>Nothing to show</strong>Try a different search or filter.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty"><strong>Nothing to show</strong>Try a different search or filter.</div></td></tr>`;
     return;
   }
-
   tbody.innerHTML = list.map(p => {
-    const low = p.quantity <= LOW_STOCK_THRESHOLD;
+    const qty = Number(p.quantity || 0);
+    const low = qty > 0 && qty <= LOW_STOCK_THRESHOLD;
+    const out = qty === 0;
+    const status = out ? "Out of stock" : low ? "Low stock" : "In stock";
     return `<tr>
-      <td class="name-cell">
-        ${p.image_url ? `<img class="row-thumb" src="${escapeHtml(p.image_url)}">` : ""}
-        ${escapeHtml(p.name)}
-      </td>
-      <td class="num" style="${low ? "color:var(--bad); font-weight:700;" : ""}">${p.quantity}</td>
-      <td><span class="pill ${low ? "low" : "ok"}">${low ? "⚠ Low stock" : "In stock"}</span></td>
+      <td class="name-cell">${p.image_url ? `<img class="row-thumb" src="${escapeHtml(p.image_url)}" alt="">` : `<span class="row-thumb placeholder-thumb">◈</span>`}<div><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.barcode || "No barcode")}</small></div></td>
+      <td><strong class="stock-number ${out ? "out" : low ? "low" : ""}">${qty}</strong> units</td>
+      <td>${money(qty)}</td>
+      <td><span class="pill ${out ? "draft" : low ? "low" : "ok"}">${out ? "Out of stock" : low ? "⚠ Low stock" : "In stock"}</span></td>
+      <td><button class="icon-btn" title="Edit product" onclick="openProductModal('${p.id}')">✎</button></td>
     </tr>`;
   }).join("");
 }
@@ -458,25 +501,75 @@ function renderStock() {
 // PURCHASES
 // ==========================================================
 async function loadPurchases() {
-  const { data, error } = await sb.from("purchases").select("*").is("deleted_at", null).order("purchase_date", { ascending: false }).order("created_at", { ascending: false });
+  const { data, error } = await sb.from("purchases")
+    .select("*")
+    .is("deleted_at", null)
+    .order("purchase_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
   if (error) { toast("Couldn't load purchases: " + error.message, true); return; }
+
   purchasesCache = data || [];
+
+  // The number of products/units shown in the table is derived from the
+  // existing purchase_items table; it is not duplicated in purchases.
+  const ids = purchasesCache.map(p => p.id).filter(Boolean);
+  const itemCounts = {};
+  if (ids.length) {
+    const { data: items, error: itemError } = await sb
+      .from("purchase_items")
+      .select("purchase_id, quantity")
+      .in("purchase_id", ids);
+
+    if (!itemError) {
+      (items || []).forEach(item => {
+        itemCounts[item.purchase_id] =
+          (itemCounts[item.purchase_id] || 0) + Number(item.quantity || 0);
+      });
+    }
+  }
+
+  purchasesCache.forEach(p => {
+    p._item_count = itemCounts[p.id] || 0;
+  });
+
   renderPurchases();
+}
+
+function getBillNumber(kind, record, displayIndex, totalRecords) {
+  // bill_no is used if it exists in a newer schema.
+  if (record && record.bill_no) return record.bill_no;
+
+  const prefix = kind === "purchase" ? "P" : "S";
+  const dateValue = kind === "purchase" ? record.purchase_date : record.sale_date;
+  const year = dateValue
+    ? String(dateValue).slice(0, 4)
+    : String(new Date().getFullYear());
+
+  // The table is newest-first, so reverse the display position to get the
+  // oldest-first sequential number. This keeps existing bills numbered
+  // consistently even when bill_no is not stored in the current schema.
+  const sequence = Math.max(1, (totalRecords - displayIndex));
+  return `${prefix}-${year}-${String(sequence).padStart(4, "0")}`;
 }
 
 function renderPurchases() {
   const tbody = document.getElementById("purchasesTableBody");
+
   if (!purchasesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><strong>No purchase bills yet</strong>Add a bill when stock arrives from a dealer.</div></td></tr>`;
     return;
   }
-  tbody.innerHTML = purchasesCache.map(p => `
+
+  tbody.innerHTML = purchasesCache.map((p, i) => `
     <tr style="cursor:pointer;" data-action="view-purchase" data-id="${p.id}">
-      <td>${escapeHtml(p.dealer_name)}</td>
+      <td><strong>${escapeHtml(getBillNumber("purchase", p, i, purchasesCache.length))}</strong></td>
       <td>${formatDate(p.purchase_date)}</td>
-      <td><span class="pill ${p.payment_type}">${p.payment_type}</span></td>
-      <td><span class="pill ${p.status}">${p.status === "draft" ? "Draft" : "Completed"}</span></td>
+      <td>${escapeHtml(p.dealer_name || "")}</td>
+      <td>${Number(p._item_count || 0)}</td>
       <td class="num">${money(p.total_amount)}</td>
+      <td><span class="pill ${p.payment_type}">${escapeHtml(p.payment_type || "")}</span></td>
+      <td><span class="pill ${p.status}">${p.status === "draft" ? "Draft" : "Completed"}</span></td>
       <td>
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
@@ -491,11 +584,19 @@ function renderPurchases() {
       showBillDetail("purchase", row.dataset.id);
     });
   });
+
   tbody.querySelectorAll('[data-action="edit-purchase"]').forEach(btn => {
-    btn.addEventListener("click", (e) => { e.stopPropagation(); openPurchaseModal(btn.dataset.id); });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPurchaseModal(btn.dataset.id);
+    });
   });
+
   tbody.querySelectorAll('[data-action="delete-purchase"]').forEach(btn => {
-    btn.addEventListener("click", (e) => { e.stopPropagation(); deleteBill("purchase", btn.dataset.id); });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteBill("purchase", btn.dataset.id);
+    });
   });
 }
 
@@ -557,25 +658,56 @@ function bindPurchaseModal() {
 // SALES
 // ==========================================================
 async function loadSales() {
-  const { data, error } = await sb.from("sales").select("*").is("deleted_at", null).order("sale_date", { ascending: false }).order("created_at", { ascending: false });
+  const { data, error } = await sb.from("sales")
+    .select("*")
+    .is("deleted_at", null)
+    .order("sale_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
   if (error) { toast("Couldn't load sales: " + error.message, true); return; }
+
   salesCache = data || [];
+
+  const ids = salesCache.map(s => s.id).filter(Boolean);
+  const itemCounts = {};
+  if (ids.length) {
+    const { data: items, error: itemError } = await sb
+      .from("sale_items")
+      .select("sale_id, quantity")
+      .in("sale_id", ids);
+
+    if (!itemError) {
+      (items || []).forEach(item => {
+        itemCounts[item.sale_id] =
+          (itemCounts[item.sale_id] || 0) + Number(item.quantity || 0);
+      });
+    }
+  }
+
+  salesCache.forEach(s => {
+    s._item_count = itemCounts[s.id] || 0;
+  });
+
   renderSales();
 }
 
 function renderSales() {
   const tbody = document.getElementById("salesTableBody");
+
   if (!salesCache.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><strong>No sale bills yet</strong>Add a bill each time you sell to a customer.</div></td></tr>`;
     return;
   }
-  tbody.innerHTML = salesCache.map(s => `
+
+  tbody.innerHTML = salesCache.map((s, i) => `
     <tr style="cursor:pointer;" data-action="view-sale" data-id="${s.id}">
-      <td>${escapeHtml(s.buyer_name)}</td>
+      <td><strong>${escapeHtml(getBillNumber("sale", s, i, salesCache.length))}</strong></td>
       <td>${formatDate(s.sale_date)}</td>
-      <td><span class="pill ${s.payment_type}">${s.payment_type}</span></td>
-      <td><span class="pill ${s.status}">${s.status === "draft" ? "Draft" : "Completed"}</span></td>
+      <td>${escapeHtml(s.buyer_name || "")}</td>
+      <td>${Number(s._item_count || 0)}</td>
       <td class="num">${money(s.total_amount)}</td>
+      <td><span class="pill ${s.payment_type}">${escapeHtml(s.payment_type || "")}</span></td>
+      <td><span class="pill ${s.status}">${s.status === "draft" ? "Draft" : "Completed"}</span></td>
       <td>
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-sale" data-id="${s.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
@@ -590,11 +722,19 @@ function renderSales() {
       showBillDetail("sale", row.dataset.id);
     });
   });
+
   tbody.querySelectorAll('[data-action="edit-sale"]').forEach(btn => {
-    btn.addEventListener("click", (e) => { e.stopPropagation(); openSaleModal(btn.dataset.id); });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSaleModal(btn.dataset.id);
+    });
   });
+
   tbody.querySelectorAll('[data-action="delete-sale"]').forEach(btn => {
-    btn.addEventListener("click", (e) => { e.stopPropagation(); deleteBill("sale", btn.dataset.id); });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteBill("sale", btn.dataset.id);
+    });
   });
 }
 
@@ -1555,6 +1695,23 @@ function renderDashboard() {
   // independent of the month/all-time toggle above.
   renderSalesTrendChart(completedSales);
   renderRecentActivity(completedPurchases, completedSales);
+
+  const dashboardSales = salesCash + salesCredit;
+  const dashboardPurchases = purchaseCash + purchaseCredit;
+  const lowCount = productsCache.filter(p => Number(p.quantity || 0) <= LOW_STOCK_THRESHOLD).length;
+  const stockValue = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
+  const setDash = (id, value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
+  setDash("statDashboardSales", money(dashboardSales));
+  setDash("statDashboardPurchases", money(dashboardPurchases));
+  setDash("statStockValue", money(stockValue));
+  setDash("statProductsCount", productsCache.length);
+  setDash("statLowStockCount", lowCount);
+  setDash("purchaseCountLabel", purchasesCache.length);
+  setDash("purchaseCompletedLabel", purchasesCache.filter(p => p.status === "completed").length);
+  setDash("purchaseDraftLabel", purchasesCache.filter(p => p.status === "draft").length);
+  setDash("salesCountLabel", salesCache.length);
+  setDash("salesCompletedLabel", salesCache.filter(s => s.status === "completed").length);
+  setDash("salesDraftLabel", salesCache.filter(s => s.status === "draft").length);
 }
 
 function sum(arr) { return arr.reduce((a, b) => a + Number(b || 0), 0); }
