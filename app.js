@@ -1,4 +1,3 @@
-
 // ==========================================================
 // Oriflame Sub-Dealer Stock Manager — app logic
 // ==========================================================
@@ -45,6 +44,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindScanner();
   bindPageExitSafety();
   bindRecycleBin();
+  bindStockDetailModal();
+  bindAdjustStockModal();
+  bindProductViewToggle();
   const sideBin = document.getElementById("btnRecycleBinSide");
   if (sideBin) sideBin.addEventListener("click", () => document.getElementById("btnRecycleBin")?.click());
 
@@ -274,8 +276,6 @@ function bindNav() {
 let activeProductFilter = "all";
 function bindSearchFilters() {
   document.getElementById("productSearch").addEventListener("input", renderProducts);
-  document.getElementById("stockSearch").addEventListener("input", renderStock);
-  document.getElementById("stockFilter").addEventListener("change", renderStock);
   document.querySelectorAll("[data-product-filter]").forEach(btn => {
     btn.addEventListener("click", () => {
       activeProductFilter = btn.dataset.productFilter;
@@ -297,8 +297,11 @@ function quickSearchApp(value) {
   if (input) { input.value = q; renderProducts(); }
 }
 function exportStockCsv() {
-  const rows = [["Product","Quantity","Stock value","Status"]];
-  productsCache.forEach(p => rows.push([p.name, p.quantity, Number(p.quantity || 0), p.quantity === 0 ? "Out of stock" : p.quantity <= LOW_STOCK_THRESHOLD ? "Low stock" : "In stock"]));
+  const rows = [["Product","Category","Quantity","Price","Stock value","Status"]];
+  productsCache.forEach(p => {
+    const price = Number(p.price || 0);
+    rows.push([p.name, p.category || "", p.quantity, price, Number(p.quantity || 0) * price, p.quantity === 0 ? "Out of stock" : p.quantity <= LOW_STOCK_THRESHOLD ? "Low stock" : "In stock"]);
+  });
   const csv = rows.map(r => r.map(v => `"${String(v ?? "").replaceAll('"','""')}"`).join(",")).join("\n");
   const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "stock-export.csv"; a.click(); URL.revokeObjectURL(a.href);
@@ -312,29 +315,47 @@ async function loadProducts() {
   if (error) { toast("Couldn't load products: " + error.message, true); return; }
   productsCache = data || [];
   renderProducts();
-  renderStock();
 }
 
+let productViewMode = "grid"; // 'grid' | 'list'
+
 function renderProducts() {
-  const grid = document.getElementById("productsGrid");
   const q = document.getElementById("productSearch").value.trim().toLowerCase();
   let list = productsCache.filter(p => p.name.toLowerCase().includes(q));
   if (activeProductFilter === "active") list = list.filter(p => Number(p.quantity) > LOW_STOCK_THRESHOLD);
   if (activeProductFilter === "low") list = list.filter(p => Number(p.quantity) > 0 && Number(p.quantity) <= LOW_STOCK_THRESHOLD);
   if (activeProductFilter === "out") list = list.filter(p => Number(p.quantity) === 0);
 
+  // Stock KPIs — merged in from the old standalone Stock page, always
+  // reflecting the full catalogue regardless of the current search/filter.
+  const totalUnits = productsCache.reduce((n, p) => n + Number(p.quantity || 0), 0);
+  const lowCount = productsCache.filter(p => Number(p.quantity || 0) <= LOW_STOCK_THRESHOLD).length;
+  const stockValue = productsCache.reduce((n, p) => n + Number(p.quantity || 0) * Number(p.price || 0), 0);
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  set("stockSummaryProducts", productsCache.length);
+  set("stockSummaryUnits", totalUnits);
+  set("stockSummaryValue", money(stockValue));
+  set("stockSummaryLow", lowCount);
+
+  if (productViewMode === "list") renderProductsList(list); else renderProductsGrid(list);
+}
+
+function renderProductsGrid(list) {
+  const grid = document.getElementById("productsGrid");
   if (!list.length) {
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1;"><strong>No products yet</strong>Add your first Oriflame product to start tracking stock.</div>`;
     return;
   }
 
   grid.innerHTML = list.map(p => {
-    const low = p.quantity <= LOW_STOCK_THRESHOLD;
+    const qty = Number(p.quantity || 0);
+    const low = qty <= LOW_STOCK_THRESHOLD; // includes out-of-stock, same red treatment
+    const value = qty * Number(p.price || 0);
     const photo = p.image_url
       ? `<img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}">`
       : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16l4.5-6 3 4 3-4L20 16"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>`;
     return `
-    <div class="product-card" data-id="${p.id}">
+    <div class="product-card" data-id="${p.id}" data-action="open-stock-detail">
       <div class="product-actions">
         <button class="icon-btn" data-action="edit-product" data-id="${p.id}" title="Edit">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
@@ -346,7 +367,9 @@ function renderProducts() {
       <div class="product-photo">${photo}</div>
       <div class="product-body">
         <div class="product-name">${escapeHtml(p.name)}</div>
-        <div class="qty-badge ${low ? "low" : ""}">${low ? "⚠ " : ""}${p.quantity} in stock</div>
+        ${p.category ? `<div class="product-category">${escapeHtml(p.category)}</div>` : ""}
+        <div class="qty-badge ${low ? "low" : ""}">${low ? "⚠ " : ""}${qty} in stock</div>
+        <div class="product-value">${money(value)} value</div>
       </div>
     </div>`;
   }).join("");
@@ -356,6 +379,76 @@ function renderProducts() {
   });
   grid.querySelectorAll('[data-action="edit-product"]').forEach(btn => {
     btn.addEventListener("click", (e) => { e.stopPropagation(); openProductModal(btn.dataset.id); });
+  });
+  grid.querySelectorAll('.product-card').forEach(card => {
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      openStockDetail(card.dataset.id);
+    });
+  });
+}
+
+function renderProductsList(list) {
+  const wrap = document.getElementById("productsList");
+  if (!list.length) {
+    wrap.innerHTML = `<div class="empty"><strong>Nothing to show</strong>Try a different search or filter.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = list.map(p => {
+    const qty = Number(p.quantity || 0);
+    const low = qty > 0 && qty <= LOW_STOCK_THRESHOLD;
+    const out = qty === 0;
+    const value = qty * Number(p.price || 0);
+    const statusLabel = out ? "Out of stock" : low ? "Low stock" : "In stock";
+    const statusClass = out ? "draft" : low ? "low" : "ok";
+    const photo = p.image_url
+      ? `<img src="${escapeHtml(p.image_url)}" alt="">`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16l4.5-6 3 4 3-4L20 16"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>`;
+    return `
+    <div class="product-list-row" data-id="${p.id}">
+      <div class="product-list-photo">${photo}</div>
+      <div class="product-list-info">
+        <div class="product-list-name">${escapeHtml(p.name)}</div>
+        <div class="product-list-meta">${qty} in stock · ${money(value)}${p.category ? " · " + escapeHtml(p.category) : ""}</div>
+      </div>
+      <span class="pill ${statusClass}">${statusLabel}</span>
+      <div class="product-list-actions">
+        <button class="icon-btn" data-action="edit-product" data-id="${p.id}" title="Edit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+        </button>
+        <button class="icon-btn danger" data-action="delete-product" data-id="${p.id}" title="Delete">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+        </button>
+      </div>
+    </div>`;
+  }).join("");
+
+  wrap.querySelectorAll('[data-action="delete-product"]').forEach(btn => {
+    btn.addEventListener("click", (e) => { e.stopPropagation(); deleteProduct(btn.dataset.id); });
+  });
+  wrap.querySelectorAll('[data-action="edit-product"]').forEach(btn => {
+    btn.addEventListener("click", (e) => { e.stopPropagation(); openProductModal(btn.dataset.id); });
+  });
+  wrap.querySelectorAll('.product-list-row').forEach(row => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      openStockDetail(row.dataset.id);
+    });
+  });
+}
+
+function bindProductViewToggle() {
+  const toggle = document.getElementById("productViewToggle");
+  if (!toggle) return;
+  toggle.querySelectorAll("[data-view-mode]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      productViewMode = btn.dataset.viewMode;
+      toggle.querySelectorAll("[data-view-mode]").forEach(b => b.classList.toggle("active", b === btn));
+      document.getElementById("productsGrid").style.display = productViewMode === "grid" ? "" : "none";
+      document.getElementById("productsList").style.display = productViewMode === "list" ? "" : "none";
+      renderProducts();
+    });
   });
 }
 
@@ -381,6 +474,8 @@ function openProductModal(id) {
     document.getElementById("productModalTitle").textContent = "Edit product";
     document.getElementById("pName").value = p.name;
     document.getElementById("pBarcode").value = p.barcode || "";
+    document.getElementById("pCategory").value = p.category || "";
+    document.getElementById("pPrice").value = (p.price === null || p.price === undefined) ? "" : p.price;
     document.getElementById("pQtyField").style.display = "none"; // quantity is managed via purchases/sales
     document.getElementById("pPhotoHint").textContent = "Choose a new photo only if you want to replace the current one.";
     if (p.image_url) document.getElementById("pPhotoPreview").innerHTML = `<img src="${escapeHtml(p.image_url)}">`;
@@ -388,6 +483,8 @@ function openProductModal(id) {
   } else {
     document.getElementById("productModalTitle").textContent = "Add product";
     document.getElementById("pBarcode").value = "";
+    document.getElementById("pCategory").value = "";
+    document.getElementById("pPrice").value = "";
     document.getElementById("pQtyField").style.display = "";
     document.getElementById("pPhotoHint").textContent = 'Uploaded to your Supabase storage bucket "product-images".';
     document.getElementById("pSubmitBtn").textContent = "Save product";
@@ -414,6 +511,10 @@ function bindProductModal() {
 
     const name = document.getElementById("pName").value.trim();
     const barcode = document.getElementById("pBarcode").value.trim() || null;
+    const category = document.getElementById("pCategory").value.trim() || null;
+    const priceRaw = document.getElementById("pPrice").value;
+    const price = priceRaw === "" ? null : parseFloat(priceRaw);
+    if (price !== null && (isNaN(price) || price < 0)) { toast("Enter a valid price", true); return; }
     const dup = findProductByName(name, editingProductId);
     if (dup) { toast(`A product named "${dup.name}" already exists`, true); return; }
     if (barcode) {
@@ -436,14 +537,14 @@ function bindProductModal() {
       }
 
       if (editingProductId) {
-        const update = { name, barcode };
+        const update = { name, barcode, category, price };
         if (image_url) update.image_url = image_url;
         const { error } = await sb.from("products").update(update).eq("id", editingProductId);
         if (error) throw error;
         toast("Product updated");
       } else {
         const qty = parseInt(document.getElementById("pQty").value, 10) || 0;
-        const { error } = await sb.from("products").insert({ name, quantity: qty, image_url: image_url || null, barcode });
+        const { error } = await sb.from("products").insert({ name, quantity: qty, image_url: image_url || null, barcode, category, price });
         if (error) throw error;
         toast("Product added");
       }
@@ -459,42 +560,113 @@ function bindProductModal() {
 }
 
 // ==========================================================
-// STOCK
+// STOCK DETAILS  (opened by clicking a product card or a Stock row)
 // ==========================================================
-function renderStock() {
-  const tbody = document.getElementById("stockTableBody");
-  const q = document.getElementById("stockSearch").value.trim().toLowerCase();
-  const filter = document.getElementById("stockFilter").value;
-  let list = productsCache.filter(p => p.name.toLowerCase().includes(q));
-  if (filter === "low") list = list.filter(p => Number(p.quantity) > 0 && Number(p.quantity) <= LOW_STOCK_THRESHOLD);
-  if (filter === "out") list = list.filter(p => Number(p.quantity) === 0);
+let stockDetailProductId = null;
 
-  const totalUnits = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
-  const lowCount = productsCache.filter(p => Number(p.quantity || 0) <= LOW_STOCK_THRESHOLD).length;
-  const stockValue = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
-  const set = (id, value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
-  set("stockSummaryProducts", productsCache.length);
-  set("stockSummaryUnits", totalUnits);
-  set("stockSummaryValue", money(stockValue));
-  set("stockSummaryLow", lowCount);
+function bindStockDetailModal() {
+  document.getElementById("sdEditProductBtn").addEventListener("click", () => {
+    const id = stockDetailProductId;
+    closeAllModals();
+    openProductModal(id);
+  });
+  document.getElementById("sdAdjustStockBtn").addEventListener("click", () => openAdjustStock(stockDetailProductId));
+}
 
-  if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="empty"><strong>Nothing to show</strong>Try a different search or filter.</div></td></tr>`;
-    return;
-  }
-  tbody.innerHTML = list.map(p => {
-    const qty = Number(p.quantity || 0);
-    const low = qty > 0 && qty <= LOW_STOCK_THRESHOLD;
-    const out = qty === 0;
-    const status = out ? "Out of stock" : low ? "Low stock" : "In stock";
-    return `<tr>
-      <td class="name-cell">${p.image_url ? `<img class="row-thumb" src="${escapeHtml(p.image_url)}" alt="">` : `<span class="row-thumb placeholder-thumb">◈</span>`}<div><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.barcode || "No barcode")}</small></div></td>
-      <td><strong class="stock-number ${out ? "out" : low ? "low" : ""}">${qty}</strong> units</td>
-      <td>${money(qty)}</td>
-      <td><span class="pill ${out ? "draft" : low ? "low" : "ok"}">${out ? "Out of stock" : low ? "⚠ Low stock" : "In stock"}</span></td>
-      <td><button class="icon-btn" title="Edit product" onclick="openProductModal('${p.id}')">✎</button></td>
-    </tr>`;
-  }).join("");
+function renderStockDetailPrice(p) {
+  const wrap = document.getElementById("sdPriceWrap");
+  const hasPrice = p.price !== null && p.price !== undefined && p.price !== "";
+  wrap.innerHTML = hasPrice
+    ? `<strong>${money(p.price)}</strong> <button type="button" class="text-btn" data-action="edit-price">Edit</button>`
+    : `<span style="color:var(--ink-faint);">Not set</span> <button type="button" class="text-btn" data-action="edit-price">Add price</button>`;
+
+  wrap.querySelector('[data-action="edit-price"]').addEventListener("click", () => {
+    wrap.innerHTML = `<input type="number" id="sdPriceInput" min="0" step="0.01" value="${hasPrice ? p.price : ""}" placeholder="0.00">
+      <button type="button" class="btn sm" id="sdPriceSaveBtn">Save</button>`;
+    const input = document.getElementById("sdPriceInput");
+    input.focus();
+    document.getElementById("sdPriceSaveBtn").addEventListener("click", async () => {
+      const newPrice = parseFloat(input.value);
+      if (isNaN(newPrice) || newPrice < 0) { toast("Enter a valid price", true); return; }
+      if (!requireConnection()) return;
+      const { error } = await sb.from("products").update({ price: newPrice }).eq("id", p.id);
+      if (error) { toast("Couldn't save price: " + friendlyError(error), true); return; }
+      toast("Price saved");
+      await loadProducts();
+      const updated = productsCache.find(x => x.id === p.id);
+      if (updated) openStockDetail(updated.id); // re-render this screen with the fresh value
+      renderDashboard();
+    });
+  });
+}
+
+function openStockDetail(id) {
+  const p = productsCache.find(x => x.id === id);
+  if (!p) return;
+  stockDetailProductId = id;
+
+  const qty = Number(p.quantity || 0);
+  const low = qty > 0 && qty <= LOW_STOCK_THRESHOLD;
+  const out = qty === 0;
+  const status = out ? "Out of stock" : low ? "⚠ Low stock" : "In stock";
+  const statusClass = out ? "draft" : low ? "low" : "ok";
+
+  document.getElementById("sdPhoto").innerHTML = p.image_url
+    ? `<img src="${escapeHtml(p.image_url)}" alt="">`
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16l4.5-6 3 4 3-4L20 16"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>`;
+  document.getElementById("sdName").textContent = p.name;
+  const skuEl = document.getElementById("sdSku");
+  if (p.barcode) { skuEl.textContent = "SKU: " + p.barcode; skuEl.style.display = ""; }
+  else { skuEl.textContent = ""; skuEl.style.display = "none"; }
+  document.getElementById("sdCategory").textContent = p.category || "—";
+  document.getElementById("sdQty").textContent = `${qty} units`;
+  document.getElementById("sdValue").textContent = money(qty * Number(p.price || 0));
+  const statusEl = document.getElementById("sdStatus");
+  statusEl.textContent = status;
+  statusEl.className = "pill " + statusClass;
+  renderStockDetailPrice(p);
+
+  openModal("modalStockDetail");
+}
+
+function openAdjustStock(id) {
+  const p = productsCache.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById("asProductLabel").textContent = p.name;
+  document.getElementById("asNewQty").value = p.quantity;
+  document.getElementById("asReason").value = "";
+  document.getElementById("formAdjustStock").dataset.productId = id;
+  closeAllModals();
+  openModal("modalAdjustStock");
+}
+
+function bindAdjustStockModal() {
+  document.getElementById("formAdjustStock").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!requireConnection()) return;
+    const id = e.target.dataset.productId;
+    const p = productsCache.find(x => x.id === id);
+    if (!p) return;
+    const newQty = parseInt(document.getElementById("asNewQty").value, 10);
+    if (isNaN(newQty) || newQty < 0) { toast("Enter a valid quantity", true); return; }
+    const reason = document.getElementById("asReason").value.trim() || null;
+
+    const { error } = await sb.from("products").update({ quantity: newQty }).eq("id", id);
+    if (error) { toast("Couldn't adjust stock: " + friendlyError(error), true); return; }
+
+    // Best-effort audit log — if the stock_adjustments table hasn't been
+    // created yet, the quantity change above still succeeds regardless.
+    try {
+      await sb.from("stock_adjustments").insert({
+        product_id: id, product_name: p.name,
+        previous_quantity: p.quantity, new_quantity: newQty, reason
+      });
+    } catch (e2) { /* non-fatal */ }
+
+    toast("Stock adjusted");
+    closeAllModals();
+    await refreshAll();
+  });
 }
 
 // ==========================================================
@@ -563,14 +735,14 @@ function renderPurchases() {
 
   tbody.innerHTML = purchasesCache.map((p, i) => `
     <tr style="cursor:pointer;" data-action="view-purchase" data-id="${p.id}">
-      <td><strong>${escapeHtml(getBillNumber("purchase", p, i, purchasesCache.length))}</strong></td>
+      <td class="mobile-hide-col"><strong>${escapeHtml(getBillNumber("purchase", p, i, purchasesCache.length))}</strong></td>
       <td>${formatDate(p.purchase_date)}</td>
-      <td>${escapeHtml(p.dealer_name || "")}</td>
-      <td>${Number(p._item_count || 0)}</td>
+      <td class="mobile-hide-col">${escapeHtml(p.dealer_name || "")}</td>
+      <td class="mobile-hide-col">${Number(p._item_count || 0)}</td>
       <td class="num">${money(p.total_amount)}</td>
-      <td><span class="pill ${p.payment_type}">${escapeHtml(p.payment_type || "")}</span></td>
+      <td class="mobile-hide-col"><span class="pill ${p.payment_type}">${escapeHtml(p.payment_type || "")}</span></td>
       <td><span class="pill ${p.status}">${p.status === "draft" ? "Draft" : "Completed"}</span></td>
-      <td>
+      <td class="actions-col">
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-purchase" data-id="${p.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
           <button class="icon-btn danger" data-action="delete-purchase" data-id="${p.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
@@ -701,14 +873,14 @@ function renderSales() {
 
   tbody.innerHTML = salesCache.map((s, i) => `
     <tr style="cursor:pointer;" data-action="view-sale" data-id="${s.id}">
-      <td><strong>${escapeHtml(getBillNumber("sale", s, i, salesCache.length))}</strong></td>
+      <td class="mobile-hide-col"><strong>${escapeHtml(getBillNumber("sale", s, i, salesCache.length))}</strong></td>
       <td>${formatDate(s.sale_date)}</td>
-      <td>${escapeHtml(s.buyer_name || "")}</td>
-      <td>${Number(s._item_count || 0)}</td>
+      <td class="mobile-hide-col">${escapeHtml(s.buyer_name || "")}</td>
+      <td class="mobile-hide-col">${Number(s._item_count || 0)}</td>
       <td class="num">${money(s.total_amount)}</td>
-      <td><span class="pill ${s.payment_type}">${escapeHtml(s.payment_type || "")}</span></td>
+      <td class="mobile-hide-col"><span class="pill ${s.payment_type}">${escapeHtml(s.payment_type || "")}</span></td>
       <td><span class="pill ${s.status}">${s.status === "draft" ? "Draft" : "Completed"}</span></td>
-      <td>
+      <td class="actions-col">
         <div class="row-actions">
           <button class="icon-btn" data-action="edit-sale" data-id="${s.id}" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>
           <button class="icon-btn danger" data-action="delete-sale" data-id="${s.id}" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
@@ -1374,6 +1546,7 @@ async function deleteBill(kind, id) {
   const { error } = await sb.rpc(fn, arg);
   if (error) { toast("Couldn't delete bill: " + friendlyError(error), true); return; }
   toast("Bill moved to the recycle bin");
+  closeAllModals(); // no-op if the detail view wasn't open
   await refreshAll();
 }
 
@@ -1387,8 +1560,15 @@ async function showBillDetail(kind, id) {
   document.getElementById("detailTitle").textContent =
     kind === "purchase" ? `Purchase — ${header.dealer_name}` : `Sale — ${header.buyer_name}`;
 
+  const cacheArr = kind === "purchase" ? purchasesCache : salesCache;
+  const idx = cacheArr.findIndex(b => b.id === id);
+  const billNo = getBillNumber(kind, header, idx, cacheArr.length);
+  const itemCount = items ? items.length : Number(header._item_count || 0);
+
   document.getElementById("detailBody").innerHTML = `
+    <div class="breakdown-row"><span>Bill no.</span><strong>${escapeHtml(billNo)}</strong></div>
     <div class="breakdown-row"><span>Date</span><strong>${formatDate(header.purchase_date || header.sale_date)}</strong></div>
+    <div class="breakdown-row"><span>Items</span><strong>${itemCount}</strong></div>
     <div class="breakdown-row"><span>Payment</span><span class="pill ${header.payment_type}">${header.payment_type}</span></div>
     <div class="breakdown-row"><span>Status</span><span class="pill ${header.status}">${header.status === "draft" ? "Draft" : "Completed"}</span></div>
     <div class="table-wrap" style="margin-top:12px;">
@@ -1415,6 +1595,11 @@ async function showBillDetail(kind, id) {
     closeAllModals();
     if (kind === "purchase") openPurchaseModal(id); else openSaleModal(id);
   });
+
+  // Mobile-only header delete button (desktop keeps the pencil/trash icons
+  // in the table's Actions column instead — see the actions-col CSS rule)
+  const deleteBtn = document.getElementById("detailDeleteBtn");
+  deleteBtn.onclick = () => deleteBill(kind, id);
 
   openModal("modalDetail");
 }
@@ -1699,7 +1884,7 @@ function renderDashboard() {
   const dashboardSales = salesCash + salesCredit;
   const dashboardPurchases = purchaseCash + purchaseCredit;
   const lowCount = productsCache.filter(p => Number(p.quantity || 0) <= LOW_STOCK_THRESHOLD).length;
-  const stockValue = productsCache.reduce((n,p) => n + Number(p.quantity || 0), 0);
+  const stockValue = productsCache.reduce((n,p) => n + Number(p.quantity || 0) * Number(p.price || 0), 0);
   const setDash = (id, value) => { const el=document.getElementById(id); if(el) el.textContent=value; };
   setDash("statDashboardSales", money(dashboardSales));
   setDash("statDashboardPurchases", money(dashboardPurchases));

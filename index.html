@@ -13,7 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=12">
+<link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
 
@@ -36,7 +36,6 @@
   <div class="nav-group">
     <button class="nav-btn active" data-view="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="8" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="15" width="7" height="6" rx="1.5"/></svg><span>Dashboard</span></button>
     <button class="nav-btn" data-view="products"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/></svg><span>Products</span></button>
-    <button class="nav-btn" data-view="stock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7l-8-4-8 4 8 4 8-4z"/><path d="M4 7v10l8 4 8-4V7"/><path d="M4 7l8 4M20 7l-8 4"/></svg><span>Stock</span></button>
     <button class="nav-btn" data-view="purchases"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h2l2.2 12.2a2 2 0 0 0 2 1.8h8.6a2 2 0 0 0 2-1.6L21 8H6"/><circle cx="9" cy="21" r="1"/><circle cx="17" cy="21" r="1"/></svg><span>Purchases</span></button>
     <button class="nav-btn" data-view="sales"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg><span>Sales</span></button>
   </div>
@@ -66,28 +65,38 @@
   </section>
 
   <section class="view" id="view-products">
-    <div class="view-head modern-head"><div><span class="eyebrow">CATALOGUE</span><h2>Products</h2><p>Manage your product catalogue and availability.</p></div><button class="btn primary-lg" id="btnAddProduct"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>Add product</button></div>
-    <div class="toolbar"><div class="search-bar"><span>⌕</span><input type="text" id="productSearch" placeholder="Search products…"></div><div class="filter-pills" id="productFilters"><button class="filter-pill active" data-product-filter="all">All</button><button class="filter-pill" data-product-filter="active">In stock</button><button class="filter-pill" data-product-filter="low">Low stock</button><button class="filter-pill" data-product-filter="out">Out of stock</button></div><div class="view-toggle"><button class="active" title="Grid">▦</button><button title="List">☷</button></div></div>
+    <div class="view-head modern-head">
+      <div><span class="eyebrow">CATALOGUE &amp; INVENTORY</span><h2>Products</h2><p>Manage your product catalogue and stock levels.</p></div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn ghost" type="button" onclick="exportStockCsv()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Export</button>
+        <button class="btn primary-lg" id="btnAddProduct"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>Add product</button>
+      </div>
+    </div>
+    <div class="stock-summary">
+      <div><span>Products</span><strong id="stockSummaryProducts">0</strong></div>
+      <div><span>Units in stock</span><strong id="stockSummaryUnits">0</strong></div>
+      <div><span>Stock value</span><strong id="stockSummaryValue">₹0</strong></div>
+      <div class="warn"><span>Needs attention</span><strong id="stockSummaryLow">0</strong></div>
+    </div>
+    <div class="toolbar">
+      <div class="search-bar"><span>⌕</span><input type="text" id="productSearch" placeholder="Search products…"></div>
+      <div class="filter-pills" id="productFilters"><button class="filter-pill active" data-product-filter="all">All</button><button class="filter-pill" data-product-filter="active">In stock</button><button class="filter-pill" data-product-filter="low">Low stock</button><button class="filter-pill" data-product-filter="out">Out of stock</button></div>
+      <div class="view-toggle" id="productViewToggle"><button class="active" type="button" data-view-mode="grid" title="Grid">▦</button><button type="button" data-view-mode="list" title="List">☷</button></div>
+    </div>
     <div class="products-grid" id="productsGrid"></div>
-  </section>
-
-  <section class="view" id="view-stock">
-    <div class="view-head modern-head"><div><span class="eyebrow">INVENTORY</span><h2>Stock</h2><p>Monitor quantity, stock value and reorder status at a glance.</p></div><button class="btn ghost" type="button" onclick="exportStockCsv()">⇩ Export</button></div>
-    <div class="stock-summary"><div><span>Products</span><strong id="stockSummaryProducts">0</strong></div><div><span>Units in stock</span><strong id="stockSummaryUnits">0</strong></div><div><span>Stock value</span><strong id="stockSummaryValue">₹0</strong></div><div class="warn"><span>Needs attention</span><strong id="stockSummaryLow">0</strong></div></div>
-    <div class="toolbar"><div class="search-bar"><span>⌕</span><input type="text" id="stockSearch" placeholder="Search products…"></div><select id="stockFilter"><option value="all">All products</option><option value="low">Low stock</option><option value="out">Out of stock</option></select></div>
-    <div class="table-wrap"><div class="table-scroll"><table class="modern-table"><thead><tr><th>Product</th><th>Current stock</th><th>Stock value</th><th>Status</th><th>Actions</th></tr></thead><tbody id="stockTableBody"></tbody></table></div></div>
+    <div class="products-list" id="productsList" style="display:none;"></div>
   </section>
 
   <section class="view" id="view-purchases">
     <div class="view-head modern-head"><div><span class="eyebrow">INCOMING STOCK</span><h2>Purchases</h2><p>Manage your purchase bills and incoming inventory.</p></div><button class="btn primary-lg" id="btnAddPurchase"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>New purchase</button></div>
     <div class="summary-strip"><div><span>Total bills</span><strong id="purchaseCountLabel">—</strong></div><div><span>Completed</span><strong id="purchaseCompletedLabel">—</strong></div><div><span>Pending drafts</span><strong id="purchaseDraftLabel">—</strong></div></div>
-    <div class="table-wrap"><div class="table-scroll"><table class="modern-table"><thead><tr><th>Bill No.</th><th>Date</th><th>Dealer</th><th>Items</th><th>Total amount</th><th>Payment</th><th>Status</th><th>Actions</th></tr></thead><tbody id="purchasesTableBody"></tbody></table></div></div>
+    <div class="table-wrap"><div class="table-scroll"><table class="modern-table bills-table"><thead><tr><th class="mobile-hide-col">Bill No.</th><th>Date</th><th class="mobile-hide-col">Dealer</th><th class="mobile-hide-col">Items</th><th>Total amount</th><th class="mobile-hide-col">Payment</th><th>Status</th><th class="actions-col">Actions</th></tr></thead><tbody id="purchasesTableBody"></tbody></table></div></div>
   </section>
 
   <section class="view" id="view-sales">
     <div class="view-head modern-head"><div><span class="eyebrow">OUTGOING STOCK</span><h2>Sales</h2><p>Manage customer sales, payments and completed bills.</p></div><button class="btn primary-lg" id="btnAddSale"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>New sale</button></div>
     <div class="summary-strip"><div><span>Total bills</span><strong id="salesCountLabel">—</strong></div><div><span>Completed</span><strong id="salesCompletedLabel">—</strong></div><div><span>Pending drafts</span><strong id="salesDraftLabel">—</strong></div></div>
-    <div class="table-wrap"><div class="table-scroll"><table class="modern-table"><thead><tr><th>Bill No.</th><th>Date</th><th>Customer</th><th>Items</th><th>Total amount</th><th>Payment</th><th>Status</th><th>Actions</th></tr></thead><tbody id="salesTableBody"></tbody></table></div></div>
+    <div class="table-wrap"><div class="table-scroll"><table class="modern-table bills-table"><thead><tr><th class="mobile-hide-col">Bill No.</th><th>Date</th><th class="mobile-hide-col">Customer</th><th class="mobile-hide-col">Items</th><th>Total amount</th><th class="mobile-hide-col">Payment</th><th>Status</th><th class="actions-col">Actions</th></tr></thead><tbody id="salesTableBody"></tbody></table></div></div>
   </section>
 </main>
 
@@ -113,6 +122,16 @@
           </button>
         </div>
         <div class="hint">Lets you look this product up by scanning it in Purchases/Sales.</div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Category (optional)</label>
+          <input type="text" id="pCategory" placeholder="e.g. Skin Care">
+        </div>
+        <div class="field">
+          <label>Price (optional)</label>
+          <input type="number" id="pPrice" min="0" step="0.01" placeholder="0.00">
+        </div>
       </div>
       <div class="field">
         <label>Photo (optional)</label>
@@ -201,7 +220,48 @@
   </div>
 </div>
 
-<!-- ================= MODAL: BILL DETAIL (view purchase/sale line items) ================= -->
+<!-- ================= MODAL: STOCK DETAILS ================= -->
+<div class="modal-backdrop" id="modalStockDetail">
+  <div class="modal">
+    <div class="modal-head"><h3>Stock Details</h3><button class="modal-close" data-close><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <div class="stock-detail-hero">
+      <div class="stock-detail-photo" id="sdPhoto"></div>
+      <div>
+        <div class="stock-detail-name" id="sdName"></div>
+        <div class="stock-detail-sku" id="sdSku"></div>
+      </div>
+    </div>
+    <div class="breakdown-row"><span>Category</span><strong id="sdCategory">—</strong></div>
+    <div class="breakdown-row"><span>Price</span><span id="sdPriceWrap"></span></div>
+    <div class="breakdown-row"><span>Current stock</span><strong id="sdQty">0</strong></div>
+    <div class="breakdown-row total-row"><span>Stock value</span><strong id="sdValue">₹0</strong></div>
+    <div class="breakdown-row"><span>Status</span><span class="pill" id="sdStatus">In stock</span></div>
+    <div class="modal-actions">
+      <button type="button" class="btn subtle block" id="sdEditProductBtn">Edit Product</button>
+      <button type="button" class="btn block" id="sdAdjustStockBtn">Adjust Stock</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= MODAL: ADJUST STOCK ================= -->
+<div class="modal-backdrop" id="modalAdjustStock">
+  <div class="modal">
+    <div class="modal-head"><h3>Adjust Stock</h3><button class="modal-close" data-close><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <form id="formAdjustStock">
+      <p class="hint" style="margin:0 0 14px;">Adjusting <strong id="asProductLabel">this product</strong>'s quantity directly — for corrections like damage, loss, or a recount. This does not create a purchase or sale bill.</p>
+      <div class="field">
+        <label>New quantity</label>
+        <input type="number" id="asNewQty" min="0" required>
+      </div>
+      <div class="field">
+        <label>Reason (optional)</label>
+        <input type="text" id="asReason" placeholder="e.g. Damaged, recount, correction">
+      </div>
+      <button type="submit" class="btn block">Save adjustment</button>
+    </form>
+  </div>
+</div>
+
 <!-- ================= MODAL: RECYCLE BIN ================= -->
 <div class="modal-backdrop" id="modalRecycleBin">
   <div class="modal" style="max-width:640px;">
@@ -218,7 +278,15 @@
 
 <div class="modal-backdrop" id="modalDetail">
   <div class="modal">
-    <div class="modal-head"><h3 id="detailTitle">Bill</h3><button class="modal-close" data-close><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <div class="modal-head">
+      <h3 id="detailTitle">Bill</h3>
+      <div class="modal-head-actions">
+        <button class="icon-btn danger detail-delete-btn" id="detailDeleteBtn" title="Delete bill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+        </button>
+        <button class="modal-close" data-close><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      </div>
+    </div>
     <div id="detailBody"></div>
     <div id="detailEditWrap" style="margin-top:14px;"></div>
   </div>
@@ -273,14 +341,11 @@
 </div>
 
 <div class="toast" id="toast"></div>
-
-
-<div class="toast" id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=37"></script>
 </body>
 </html>
